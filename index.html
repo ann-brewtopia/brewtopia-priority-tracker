@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Priority Tracker</title>
+<link rel="stylesheet" href="css/styles.css">
+<style>
+  /* Login screen — new, since there was never a real sign-in page before */
+  #loginScreen{
+    min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:var(--bg);
+  }
+  .login-box{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:36px 32px; max-width:360px; width:100%; text-align:center;
+  }
+  .login-box h1{ font-size:22px; margin:0 0 6px; }
+  .login-box p{ color:var(--muted); font-size:13px; margin:0 0 20px; }
+  .login-box input[type=email]{
+    width:100%; box-sizing:border-box; border:1px solid var(--border); border-radius:6px;
+    padding:10px 12px; font-size:14px; margin-bottom:12px;
+  }
+  .login-box button{
+    width:100%; background:var(--brand); color:#fff; border:none; border-radius:6px;
+    padding:10px; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  .login-box button:hover{ background:var(--brand-dark); }
+  #magicLinkNote{ font-size:12px; color:var(--muted); margin-top:10px; display:block; }
+  .sidebar-item.coming-soon{ opacity:0.45; cursor:default; }
+</style>
+</head>
+<body>
+
+<div id="loginScreen">
+  <div class="login-box">
+    <h1>Priority Tracker</h1>
+    <p>Sign in with your work email — we'll send you a link, no password needed.</p>
+    <form id="magicLinkForm">
+      <input type="email" id="magicLinkEmail" placeholder="you@onlybrewtopia.com" required />
+      <button type="submit">Send sign-in link</button>
+    </form>
+    <span id="magicLinkNote"></span>
+  </div>
+</div>
+
+<div id="appRoot" class="wrap" style="display:none;">
+  <div class="logo-strip">
+    <span style="font-weight:800; color:var(--brand); font-size:18px;">BREWTOPIA</span>
+    <div class="confidential-pill">Internal &middot; Priority Tracker</div>
+  </div>
+
+  <header>
+    <div class="title-block">
+      <h1>Priority Tracker</h1>
+      <p>Day-by-day priorities, team P1s, and open follow-ups — one glance, no phone calls.</p>
+    </div>
+    <div class="header-right">
+      <span id="currentUserLabel"></span>
+      <button id="signOutBtn" class="identity-change-btn">Sign out</button>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <nav class="sidebar" id="sidebar">
+      <div class="sidebar-nav">
+        <button class="sidebar-item active" data-tab="home" title="Home">
+          <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg></span>
+          <span class="sidebar-label">Home</span>
+        </button>
+        <button class="sidebar-item" data-tab="priorities" title="Daily Priorities">
+          <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/></svg></span>
+          <span class="sidebar-label">Daily Priorities</span>
+        </button>
+        <div class="sidebar-divider"></div>
+        <button class="sidebar-item" data-tab="kpis" title="KPIs">
+          <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="12" width="4" height="8"/><rect x="10" y="7" width="4" height="13"/><rect x="16" y="3" width="4" height="17"/></svg></span>
+          <span class="sidebar-label">KPIs</span>
+        </button>
+        <button class="sidebar-item coming-soon" title="Not wired up to the database yet">
+          <span class="sidebar-icon">&#128337;</span><span class="sidebar-label">History (soon)</span>
+        </button>
+      </div>
+    </nav>
+
+    <div class="main-content">
+      <div class="content">
+
+        <div class="tab-content" id="tab-home">
+          <section class="panel panel-full">
+            <h2><span class="flag">&#9873;</span> Team P1s</h2>
+            <table class="history-table p1-table">
+              <thead><tr><th>Description</th><th>Owner</th><th>Due</th><th>Status</th><th></th></tr></thead>
+              <tbody id="p1TableBody"></tbody>
+            </table>
+            <button class="add-line" id="addP1">+ Add a P1</button>
+          </section>
+          <section class="panel panel-full" style="margin-top:24px;">
+            <h2><span class="star">&#9733;</span> Follow-Ups</h2>
+            <div id="followupList"></div>
+            <button class="add-line" id="addFollowup">+ Add follow-up</button>
+          </section>
+        </div>
+
+        <div class="tab-content" id="tab-priorities" style="display:none;">
+          <section class="rail-section">
+            <div class="rail-label">This Week's Order Rail &middot; each person edits their own ticket</div>
+            <div class="rail"><div class="rail-scroll" id="ticketRail"></div></div>
+          </section>
+        </div>
+
+        <div class="tab-content" id="tab-kpis" style="display:none;">
+          <div id="kpiAdminPanel" style="display:none; margin-bottom:20px; padding:14px 16px; border:1px solid var(--border); border-radius:8px; background:var(--brand-tint);">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; text-transform:uppercase; color:var(--brand-dark); margin-bottom:10px;">Admin — manage roster</div>
+            <form id="addKpiPersonForm" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+              <input id="newKpiName" placeholder="Name" required style="flex:1 1 140px;" />
+              <input id="newKpiPosition" placeholder="Position" style="flex:1 1 140px;" />
+              <input id="newKpiDept" placeholder="Department" required style="flex:1 1 140px;" />
+              <button type="submit" class="identity-change-btn">+ Add person</button>
+            </form>
+            <span id="kpiAdminNote" style="font-size:11.5px; color:var(--muted);"></span>
+          </div>
+
+          <div class="kpi-dept-tabs" id="kpiDeptTabs"></div>
+          <div class="kpi-controls">
+            <div class="kpi-control">
+              <span class="kpi-control-label">Week</span>
+              <select id="kpiWeekSelect"></select>
+            </div>
+            <div class="kpi-control">
+              <span class="kpi-control-label">Search</span>
+              <input id="kpiSearchInput" placeholder="Search names…" style="border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:12px;" />
+            </div>
+          </div>
+          <div id="kpiTabBody"></div>
+        </div>
+
+      </div>
+      <footer>SAVED TO SUPABASE &middot; SHARED WITH THE TEAM</footer>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase-client.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
