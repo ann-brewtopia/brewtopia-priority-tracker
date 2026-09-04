@@ -1525,7 +1525,7 @@ const rememberAwareStorage = {
   }
 };
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     storage: rememberAwareStorage,
     persistSession: true,
@@ -1556,13 +1556,13 @@ let currentProfile = null;  // { id, full_name, role } from public.profiles
 async function initAuth(){
   handleUrlAuthSignals(); // expired/invalid link errors only — see note below
 
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await supabaseClient.auth.getSession();
   if(session){
     await loadCurrentProfile(session.user);
   }
   showAuthUI();
 
-  supabase.auth.onAuthStateChange(async (event, session) => {
+  supabaseClient.auth.onAuthStateChange(async (event, session) => {
     // Fires once Supabase has actually validated the recovery link and
     // established a real session from it — this is the reliable signal to
     // show the "set new password" form, not guessing from the URL.
@@ -1640,7 +1640,7 @@ function handleUrlAuthSignals(){
 // ----------------------------------------------------------------------------
 async function signInWithPassword(email, password, remember){
   setRememberMePreference(remember);
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
   return error;
 }
 
@@ -1648,14 +1648,14 @@ async function signInWithPassword(email, password, remember){
 // sends a reset-password email, which doubles as a "set your first password"
 // link (Supabase doesn't distinguish "reset" from "set for the first time").
 async function requestPasswordReset(email){
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+  const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
     redirectTo: window.location.origin
   });
   return error;
 }
 
 async function setNewPassword(password){
-  const { error } = await supabase.auth.updateUser({ password });
+  const { error } = await supabaseClient.auth.updateUser({ password });
   return error;
 }
 
@@ -1663,7 +1663,7 @@ async function setNewPassword(password){
 // Magic link (kept as the alternative option)
 // ----------------------------------------------------------------------------
 async function sendMagicLink(email){
-  const { error } = await supabase.auth.signInWithOtp({
+  const { error } = await supabaseClient.auth.signInWithOtp({
     email,
     options: { emailRedirectTo: window.location.origin }
   });
@@ -1671,7 +1671,7 @@ async function sendMagicLink(email){
 }
 
 async function signOut(){
-  await supabase.auth.signOut();
+  await supabaseClient.auth.signOut();
 }
 
 // ----------------------------------------------------------------------------
@@ -1862,7 +1862,7 @@ async function checkForWeekRollover(){
     .from('priorities').select('member_id').eq('week_start', monday);
   const alreadyHandled = new Set((alreadyThisWeek || []).map(p => p.member_id));
 
-  const { data: memberRows } = await supabase.from('members').select('id');
+  const { data: memberRows } = await supabaseClient.from('members').select('id');
   for(const m of (memberRows || [])){
     if(alreadyHandled.has(m.id)) continue; // this member already has rows for this week
 
@@ -1885,7 +1885,7 @@ async function checkForWeekRollover(){
       .not('text', 'eq', '');
 
     for(const p of (unfinished || [])){
-      await supabase.from('priorities').insert({
+      await supabaseClient.from('priorities').insert({
         member_id: m.id,
         week_start: monday,
         day: 'Mon',
@@ -1922,12 +1922,12 @@ async function claimTicket(memberId){
 }
 
 async function updateMember(memberId, fields){
-  const { error } = await supabase.from('members').update(fields).eq('id', memberId);
+  const { error } = await supabaseClient.from('members').update(fields).eq('id', memberId);
   if(error) console.error(error);
 }
 
 async function deleteMember(memberId){
-  const { error } = await supabase.from('members').delete().eq('id', memberId);
+  const { error } = await supabaseClient.from('members').delete().eq('id', memberId);
   if(error){ console.error(error); return; }
   await loadAllData();
 }
@@ -1940,7 +1940,7 @@ function canEditTicket(member){
 // Priorities
 // ----------------------------------------------------------------------------
 async function addPriority(memberId, day){
-  const { error } = await supabase.from('priorities').insert({
+  const { error } = await supabaseClient.from('priorities').insert({
     member_id: memberId, week_start: currentWeekStart, day, text: ''
   });
   if(error) console.error(error);
@@ -1948,12 +1948,12 @@ async function addPriority(memberId, day){
 }
 
 async function updatePriority(priorityId, fields){
-  const { error } = await supabase.from('priorities').update(fields).eq('id', priorityId);
+  const { error } = await supabaseClient.from('priorities').update(fields).eq('id', priorityId);
   if(error) console.error(error);
 }
 
 async function deletePriority(priorityId){
-  const { error } = await supabase.from('priorities').delete().eq('id', priorityId);
+  const { error } = await supabaseClient.from('priorities').delete().eq('id', priorityId);
   if(error) console.error(error);
   await loadAllData();
 }
@@ -1963,16 +1963,16 @@ async function deletePriority(priorityId){
 async function togglePriorityFlag(priority, memberName){
   const existing = p1s.find(p => p.source_priority_id === priority.id);
   if(existing){
-    await supabase.from('p1s').delete().eq('id', existing.id);
-    await supabase.from('priorities').update({ flagged: false }).eq('id', priority.id);
+    await supabaseClient.from('p1s').delete().eq('id', existing.id);
+    await supabaseClient.from('priorities').update({ flagged: false }).eq('id', priority.id);
   }else{
-    await supabase.from('p1s').insert({
+    await supabaseClient.from('p1s').insert({
       text: `${memberName}: ${priority.text}`,
       owner_name: memberName,
       source_priority_id: priority.id,
       auto_text: true
     });
-    await supabase.from('priorities').update({ flagged: true }).eq('id', priority.id);
+    await supabaseClient.from('priorities').update({ flagged: true }).eq('id', priority.id);
   }
   await loadAllData();
 }
@@ -1981,7 +1981,7 @@ async function togglePriorityFlag(priority, memberName){
 // P1s
 // ----------------------------------------------------------------------------
 async function addP1(){
-  const { error } = await supabase.from('p1s').insert({ text: '', owner_name: '' });
+  const { error } = await supabaseClient.from('p1s').insert({ text: '', owner_name: '' });
   if(error) console.error(error);
   await loadAllData();
 }
@@ -1991,16 +1991,16 @@ async function updateP1(id, fields){
   // a manual edit would just get overwritten next time the view re-reads the
   // live join.
   if(fields.text !== undefined) fields.auto_text = false;
-  const { error } = await supabase.from('p1s').update(fields).eq('id', id);
+  const { error } = await supabaseClient.from('p1s').update(fields).eq('id', id);
   if(error) console.error(error);
 }
 
 async function deleteP1(id){
   const p1 = p1s.find(p => p.id === id);
-  const { error } = await supabase.from('p1s').delete().eq('id', id);
+  const { error } = await supabaseClient.from('p1s').delete().eq('id', id);
   if(error) console.error(error);
   if(p1 && p1.source_priority_id){
-    await supabase.from('priorities').update({ flagged: false }).eq('id', p1.source_priority_id);
+    await supabaseClient.from('priorities').update({ flagged: false }).eq('id', p1.source_priority_id);
   }
   await loadAllData();
 }
@@ -2009,39 +2009,39 @@ async function deleteP1(id){
 // Follow-ups
 // ----------------------------------------------------------------------------
 async function addFollowup(){
-  const { data, error } = await supabase.from('followups').insert({ owner_name: '' }).select().single();
+  const { data, error } = await supabaseClient.from('followups').insert({ owner_name: '' }).select().single();
   if(error){ console.error(error); return; }
-  await supabase.from('followup_entries').insert({ followup_id: data.id, text: '' });
+  await supabaseClient.from('followup_entries').insert({ followup_id: data.id, text: '' });
   await loadAllData();
 }
 
 async function addFollowupEntry(followupId){
-  const { error } = await supabase.from('followup_entries').insert({ followup_id: followupId, text: '' });
+  const { error } = await supabaseClient.from('followup_entries').insert({ followup_id: followupId, text: '' });
   if(error) console.error(error);
   await loadAllData();
 }
 
 async function updateFollowup(id, fields){
-  const { error } = await supabase.from('followups').update(fields).eq('id', id);
+  const { error } = await supabaseClient.from('followups').update(fields).eq('id', id);
   if(error) console.error(error);
 }
 
 async function updateFollowupEntry(id, fields){
-  const { error } = await supabase.from('followup_entries').update(fields).eq('id', id);
+  const { error } = await supabaseClient.from('followup_entries').update(fields).eq('id', id);
   if(error) console.error(error);
 }
 
 async function deleteFollowup(id){
-  const { error } = await supabase.from('followups').delete().eq('id', id);
+  const { error } = await supabaseClient.from('followups').delete().eq('id', id);
   if(error) console.error(error);
   await loadAllData();
 }
 
 async function deleteFollowupEntry(id, followupId){
-  await supabase.from('followup_entries').delete().eq('id', id);
-  const remaining = await supabase.from('followup_entries').select('id').eq('followup_id', followupId);
+  await supabaseClient.from('followup_entries').delete().eq('id', id);
+  const remaining = await supabaseClient.from('followup_entries').select('id').eq('followup_id', followupId);
   if(remaining.data && remaining.data.length === 0){
-    await supabase.from('followups').delete().eq('id', followupId); // don't leave an empty card behind
+    await supabaseClient.from('followups').delete().eq('id', followupId); // don't leave an empty card behind
   }
   await loadAllData();
 }
@@ -2053,7 +2053,7 @@ async function deleteFollowupEntry(id, followupId){
 // changes to every open tab the moment they happen.
 // ----------------------------------------------------------------------------
 function subscribeToRealtimeUpdates(){
-  supabase.channel('priority-tracker-changes')
+  supabaseClient.channel('priority-tracker-changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, loadAllData)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'priorities' }, loadAllData)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'p1s' }, loadAllData)
@@ -2096,7 +2096,7 @@ async function loadKpiData(){
 // Admin-only from here down — matches canEditKpis() being admin-only in the
 // original app. RLS backs this up regardless of what the UI allows.
 async function createKpiPerson(name, position, department){
-  const { error } = await supabase.from('kpi_people').insert({ name, position, department });
+  const { error } = await supabaseClient.from('kpi_people').insert({ name, position, department });
   if(error) console.error(error);
   await loadKpiData();
 }
@@ -2104,19 +2104,19 @@ async function createKpiPerson(name, position, department){
 async function addKpiItem(personId, title){
   const person = kpiRoster.find(p => p.id === personId);
   const sortOrder = person ? person.kpis.length : 0;
-  const { error } = await supabase.from('kpi_items').insert({ kpi_person_id: personId, title, sort_order: sortOrder });
+  const { error } = await supabaseClient.from('kpi_items').insert({ kpi_person_id: personId, title, sort_order: sortOrder });
   if(error) console.error(error);
   await loadKpiData();
 }
 
 async function toggleKpiShare(personId, shared){
-  const { error } = await supabase.from('kpi_people').update({ shared_with_owner: shared }).eq('id', personId);
+  const { error } = await supabaseClient.from('kpi_people').update({ shared_with_owner: shared }).eq('id', personId);
   if(error) console.error(error);
   await loadKpiData();
 }
 
 async function linkKpiPersonToUser(personId, userId){
-  const { error } = await supabase.from('kpi_people').update({ linked_user_id: userId || null }).eq('id', personId);
+  const { error } = await supabaseClient.from('kpi_people').update({ linked_user_id: userId || null }).eq('id', personId);
   if(error) console.error(error);
   await loadKpiData();
 }
@@ -2129,7 +2129,7 @@ async function saveKpiNote(itemId, weekStart, notes){
 }
 
 async function loadAllProfiles(){
-  const { data, error } = await supabase.from('profiles').select('id, full_name').order('full_name');
+  const { data, error } = await supabaseClient.from('profiles').select('id, full_name').order('full_name');
   if(error){ console.error(error); return []; }
   return data;
 }
