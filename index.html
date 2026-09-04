@@ -1464,19 +1464,15 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
   // If the line above failed to load (network block, ad blocker, CDN issue,
-  // corporate firewall) window.supabase won't exist, and every script after
-  // this point would otherwise fail completely silently — no event
-  // listeners would ever attach, so clicking "Sign in" would just trigger a
-  // normal browser form submit (a page reload) with no error visible
-  // anywhere. This makes that failure loud instead of invisible.
+  // corporate firewall) window.supabase won't exist. This makes that
+  // failure loud on-screen instead of everything just silently not working.
   if(typeof window.supabase === 'undefined'){
-    document.getElementById('loginScreen').innerHTML =
-      '<div class="login-wrap"><div class="login-box"><div class="login-box-body" style="text-align:center;">' +
-      '<h1 style="margin-top:0;">Couldn\'t load the sign-in system</h1>' +
-      '<p style="color:var(--muted); font-size:13px;">A required script failed to load — this is usually a network block, ad blocker, or firewall rather than something wrong with your account. Try disabling any ad/script blocker for this site, or a different network, then reload.</p>' +
-      '</div></div></div>';
+    document.write('<div style="max-width:480px;margin:80px auto;text-align:center;font-family:sans-serif;padding:20px;">' +
+      '<h1>Could not load the sign-in system</h1>' +
+      '<p style="color:#8A7D6C;">A required script failed to load — usually a network block, ad blocker, or firewall. Try disabling any ad/script blocker for this site, or a different network, then reload.</p></div>');
   }
 </script>
+
 <script src="js/supabase-client.js"></script>
 <script src="js/auth.js"></script>
 <script src="js/data.js"></script>

@@ -223,3 +223,5 @@ document.getElementById('magicLinkForm').addEventListener('submit', async (e) =>
 });
 
 document.getElementById('signOutBtn').addEventListener('click', signOut);
+
+
