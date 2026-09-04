@@ -1584,7 +1584,7 @@ async function initAuth(){
 
 async function loadCurrentProfile(user){
   currentUser = user;
-  const { data, error } = await supabase
+  const { data, error } = await supabaseClient
     .from('profiles')
     .select('id, full_name, role')
     .eq('id', user.id)
@@ -1800,13 +1800,13 @@ function escapeHtml(str){
 async function loadAllData(){
   await checkForWeekRollover();
 
-  const { data: memberRows, error: memberErr } = await supabase
+  const { data: memberRows, error: memberErr } = await supabaseClient
     .from('members')
     .select('*')
     .order('created_at', { ascending: true });
   if(memberErr){ console.error(memberErr); return; }
 
-  const { data: priorityRows, error: priorityErr } = await supabase
+  const { data: priorityRows, error: priorityErr } = await supabaseClient
     .from('priorities')
     .select('*')
     .eq('week_start', currentWeekStart);
@@ -1817,20 +1817,20 @@ async function loadAllData(){
     priorities: priorityRows.filter(p => p.member_id === m.id)
   }));
 
-  const { data: p1Rows, error: p1Err } = await supabase
+  const { data: p1Rows, error: p1Err } = await supabaseClient
     .from('p1s_with_live_text')
     .select('*')
     .order('created_at', { ascending: true });
   if(p1Err) console.error(p1Err);
   p1s = p1Rows || [];
 
-  const { data: followupRows, error: fErr } = await supabase
+  const { data: followupRows, error: fErr } = await supabaseClient
     .from('followups')
     .select('*')
     .order('created_at', { ascending: true });
   if(fErr) console.error(fErr);
 
-  const { data: entryRows, error: eErr } = await supabase
+  const { data: entryRows, error: eErr } = await supabaseClient
     .from('followup_entries_with_live_link')
     .select('*')
     .order('created_at', { ascending: true });
@@ -1858,7 +1858,7 @@ async function checkForWeekRollover(){
   const monday = todayMondayStr();
   currentWeekStart = monday;
 
-  const { data: alreadyThisWeek } = await supabase
+  const { data: alreadyThisWeek } = await supabaseClient
     .from('priorities').select('member_id').eq('week_start', monday);
   const alreadyHandled = new Set((alreadyThisWeek || []).map(p => p.member_id));
 
@@ -1866,7 +1866,7 @@ async function checkForWeekRollover(){
   for(const m of (memberRows || [])){
     if(alreadyHandled.has(m.id)) continue; // this member already has rows for this week
 
-    const { data: priorWeeks } = await supabase
+    const { data: priorWeeks } = await supabaseClient
       .from('priorities')
       .select('week_start')
       .eq('member_id', m.id)
@@ -1876,7 +1876,7 @@ async function checkForWeekRollover(){
     if(!priorWeeks || priorWeeks.length === 0) continue; // nothing to carry forward
 
     const lastWeek = priorWeeks[0].week_start;
-    const { data: unfinished } = await supabase
+    const { data: unfinished } = await supabaseClient
       .from('priorities')
       .select('*')
       .eq('member_id', m.id)
@@ -1902,7 +1902,7 @@ async function checkForWeekRollover(){
 // Members
 // ----------------------------------------------------------------------------
 async function createMember(name){
-  const { data, error } = await supabase
+  const { data, error } = await supabaseClient
     .from('members')
     .insert({ name, title: '', owner_user_id: currentUser.id })
     .select().single();
@@ -1912,7 +1912,7 @@ async function createMember(name){
 }
 
 async function claimTicket(memberId){
-  const { error } = await supabase
+  const { error } = await supabaseClient
     .from('members')
     .update({ owner_user_id: currentUser.id })
     .eq('id', memberId)
@@ -2076,7 +2076,7 @@ function subscribeToRealtimeUpdates(){
 let kpiRoster = [];
 
 async function loadKpiData(){
-  const { data: people, error } = await supabase
+  const { data: people, error } = await supabaseClient
     .from('kpi_people')
     .select('*, kpi_items(*, kpi_notes(*))')
     .order('department', { ascending: true });
@@ -2122,7 +2122,7 @@ async function linkKpiPersonToUser(personId, userId){
 }
 
 async function saveKpiNote(itemId, weekStart, notes){
-  const { error } = await supabase
+  const { error } = await supabaseClient
     .from('kpi_notes')
     .upsert({ kpi_item_id: itemId, week_start: weekStart, notes }, { onConflict: 'kpi_item_id,week_start' });
   if(error) console.error(error);
