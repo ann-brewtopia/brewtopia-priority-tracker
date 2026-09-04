@@ -1581,6 +1581,17 @@ async function initAuth(){
   }
 
   supabaseClient.auth.onAuthStateChange(async (event, session) => {
+    // The moment you subscribe, Supabase immediately re-fires the callback
+    // once with the CURRENT session as event 'INITIAL_SESSION' — just
+    // re-announcing what getSession() above already told us. initAuth()
+    // already made the correct decision for that same snapshot (including
+    // showing the recovery form when appropriate) before ever subscribing.
+    // Reacting to this redundant event here fell through to the generic
+    // "there's a session, show the app" branch below and overwrote the
+    // recovery form a couple seconds after it had already been shown
+    // correctly — which is exactly what "flashes then logs me in" was.
+    if(event === 'INITIAL_SESSION') return;
+
     // Kept as a second safety net — see readUrlAuthSignals() for why this
     // alone isn't reliable enough to be the only mechanism.
     if(event === 'PASSWORD_RECOVERY'){
