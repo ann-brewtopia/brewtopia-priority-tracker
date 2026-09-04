@@ -1554,20 +1554,37 @@ let currentUser = null;     // the Supabase auth user object, or null if signed 
 let currentProfile = null;  // { id, full_name, role } from public.profiles
 
 async function initAuth(){
-  handleUrlAuthSignals(); // expired/invalid link errors only — see note below
+  // Read this BEFORE calling getSession() — see the long comment on
+  // readUrlAuthSignals() below for why order matters here.
+  const { isRecovery } = readUrlAuthSignals();
 
   const { data: { session } } = await supabaseClient.auth.getSession();
   if(session){
     await loadCurrentProfile(session.user);
   }
-  showAuthUI();
+
+  // Now that getSession() has had its chance to read any tokens out of the
+  // URL, it's safe to clean it up.
+  if(window.location.hash){
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+
+  // currentUser is genuinely set at this point even in the recovery case
+  // (loadCurrentProfile just ran above) — but showing the main app's data
+  // isn't appropriate until the password is actually set. boot() below
+  // uses this return value to know not to load anything yet.
+  const showingRecoveryForm = isRecovery && !!session;
+  if(showingRecoveryForm){
+    showPasswordResetForm();
+  }else{
+    showAuthUI();
+  }
 
   supabaseClient.auth.onAuthStateChange(async (event, session) => {
-    // Fires once Supabase has actually validated the recovery link and
-    // established a real session from it — this is the reliable signal to
-    // show the "set new password" form, not guessing from the URL.
+    // Kept as a second safety net — see readUrlAuthSignals() for why this
+    // alone isn't reliable enough to be the only mechanism.
     if(event === 'PASSWORD_RECOVERY'){
-      await loadCurrentProfile(session.user); // populated now, so we can drop them into the app right after they set a password
+      await loadCurrentProfile(session.user);
       showPasswordResetForm();
       return;
     }
@@ -1578,8 +1595,13 @@ async function initAuth(){
       currentProfile = null;
     }
     showAuthUI();
-    if(session) await loadAllData();
+    if(session){
+      await loadAllData();
+      subscribeToRealtimeUpdates(); // no-ops if already subscribed
+    }
   });
+
+  return { showingRecoveryForm };
 }
 
 async function loadCurrentProfile(user){
@@ -1602,25 +1624,31 @@ function isAdmin(){
 }
 
 // ----------------------------------------------------------------------------
-// Supabase reports an expired/invalid magic link as an error in the URL's
-// hash fragment (#error=access_denied&error_code=otp_expired&...). Left
-// alone, that just lands on a blank login form with zero explanation —
-// which is exactly what happened. This reads the hash once on load and
-// shows something useful.
+// Reads whatever Supabase put in the URL hash: an error
+// (#error=access_denied&error_code=otp_expired...) or a recovery-link marker
+// (#access_token=...&type=recovery...).
 //
-// Password-recovery links are handled separately, in initAuth() below, via
-// Supabase's own PASSWORD_RECOVERY event — NOT by parsing the hash here.
-// An earlier version of this function also tried to detect `type=recovery`
-// in the hash and immediately cleared it with history.replaceState(). That
-// was a real bug: the hash contains the actual session tokens the recovery
-// link grants, and Supabase's client needs to read them itself
-// (detectSessionInUrl) before they're gone. Wiping the hash early meant the
-// "set new password" form displayed correctly, but with no real session
-// behind it — so saving a new password silently had nothing to save it to.
+// The recovery case is why this function exists at all, and it's worth
+// explaining why relying only on Supabase's own PASSWORD_RECOVERY event
+// (via onAuthStateChange) turned out not to be reliable: that event fires
+// the moment Supabase's client processes the recovery token out of the URL
+// — which happens as part of getSession()/detectSessionInUrl, i.e. BEFORE
+// this app's onAuthStateChange listener has even been registered yet. By
+// the time the listener is attached, the event has already fired and been
+// missed; all getSession() sees afterward is "oh, there's a valid session,"
+// with no memory of *why* — which is exactly what caused signing straight
+// into the app instead of showing the "set new password" form.
+//
+// The fix: check the URL for `type=recovery` ourselves, independently,
+// BEFORE calling getSession(). That tells us the person's *intent*
+// (they clicked a recovery link) regardless of event-timing races. We still
+// let Supabase's own client do the actual token exchange via getSession()
+// — this function only reads the hash, it never manually parses tokens or
+// clears anything itself.
 // ----------------------------------------------------------------------------
-function handleUrlAuthSignals(){
+function readUrlAuthSignals(){
   const hash = window.location.hash;
-  if(!hash || hash.length < 2) return;
+  if(!hash || hash.length < 2) return { isRecovery: false };
   const params = new URLSearchParams(hash.slice(1));
 
   if(params.get('error')){
@@ -1629,10 +1657,9 @@ function handleUrlAuthSignals(){
     if(note) note.innerText = params.get('error_code') === 'otp_expired'
       ? 'That link expired before it was opened — request a new one below.'
       : desc;
-    // Safe to clean up here — an error means there's no valid session token
-    // in this hash to protect.
-    history.replaceState(null, '', window.location.pathname + window.location.search);
   }
+
+  return { isRecovery: params.get('type') === 'recovery' };
 }
 
 // ----------------------------------------------------------------------------
@@ -1743,8 +1770,9 @@ document.getElementById('resetPasswordForm').addEventListener('submit', async (e
     return;
   }
   note.innerText = 'Password set — signing you in…';
-  showAuthUI();     // currentUser/currentProfile were already populated during PASSWORD_RECOVERY
+  showAuthUI();     // currentUser/currentProfile were already populated in initAuth()
   await loadAllData();
+  subscribeToRealtimeUpdates();
 });
 
 document.getElementById('magicLinkForm').addEventListener('submit', async (e) => {
@@ -2052,7 +2080,10 @@ async function deleteFollowupEntry(id, followupId){
 // changed something; it needed a manual "Refresh" button. Supabase can push
 // changes to every open tab the moment they happen.
 // ----------------------------------------------------------------------------
+let realtimeSubscribed = false; // guards against duplicate subscriptions now that this is called from several sign-in paths, not just boot()
 function subscribeToRealtimeUpdates(){
+  if(realtimeSubscribed) return;
+  realtimeSubscribed = true;
   supabaseClient.channel('priority-tracker-changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, loadAllData)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'priorities' }, loadAllData)
@@ -2581,8 +2612,8 @@ function statusButtonsHtml(status, dataAttrs, editable){
 
 (async function boot(){
   try{
-    await initAuth();
-    if(currentUser){
+    const { showingRecoveryForm } = await initAuth();
+    if(currentUser && !showingRecoveryForm){
       await loadAllData();
       subscribeToRealtimeUpdates();
     }
