@@ -16,7 +16,7 @@ let currentUser = null;     // the Supabase auth user object, or null if signed 
 let currentProfile = null;  // { id, full_name, role } from public.profiles
 
 async function initAuth(){
-  handleUrlAuthSignals(); // expired-link errors, password-recovery links — before anything else
+  handleUrlAuthSignals(); // expired/invalid link errors only — see note below
 
   const { data: { session } } = await supabase.auth.getSession();
   if(session){
@@ -25,6 +25,14 @@ async function initAuth(){
   showAuthUI();
 
   supabase.auth.onAuthStateChange(async (event, session) => {
+    // Fires once Supabase has actually validated the recovery link and
+    // established a real session from it — this is the reliable signal to
+    // show the "set new password" form, not guessing from the URL.
+    if(event === 'PASSWORD_RECOVERY'){
+      await loadCurrentProfile(session.user); // populated now, so we can drop them into the app right after they set a password
+      showPasswordResetForm();
+      return;
+    }
     if(session){
       await loadCurrentProfile(session.user);
     }else{
@@ -56,12 +64,21 @@ function isAdmin(){
 }
 
 // ----------------------------------------------------------------------------
-// Supabase reports things like an expired magic link as an error in the
-// URL's hash fragment (#error=access_denied&error_code=otp_expired&...),
-// and a password-reset link as #type=recovery. Left alone, both just land
-// on a blank login form with zero explanation — which is exactly what
-// happened. This reads the hash once on load, shows something useful, and
-// cleans the URL so refreshing doesn't re-trigger the same stale message.
+// Supabase reports an expired/invalid magic link as an error in the URL's
+// hash fragment (#error=access_denied&error_code=otp_expired&...). Left
+// alone, that just lands on a blank login form with zero explanation —
+// which is exactly what happened. This reads the hash once on load and
+// shows something useful.
+//
+// Password-recovery links are handled separately, in initAuth() below, via
+// Supabase's own PASSWORD_RECOVERY event — NOT by parsing the hash here.
+// An earlier version of this function also tried to detect `type=recovery`
+// in the hash and immediately cleared it with history.replaceState(). That
+// was a real bug: the hash contains the actual session tokens the recovery
+// link grants, and Supabase's client needs to read them itself
+// (detectSessionInUrl) before they're gone. Wiping the hash early meant the
+// "set new password" form displayed correctly, but with no real session
+// behind it — so saving a new password silently had nothing to save it to.
 // ----------------------------------------------------------------------------
 function handleUrlAuthSignals(){
   const hash = window.location.hash;
@@ -74,13 +91,10 @@ function handleUrlAuthSignals(){
     if(note) note.innerText = params.get('error_code') === 'otp_expired'
       ? 'That link expired before it was opened — request a new one below.'
       : desc;
+    // Safe to clean up here — an error means there's no valid session token
+    // in this hash to protect.
+    history.replaceState(null, '', window.location.pathname + window.location.search);
   }
-
-  if(params.get('type') === 'recovery'){
-    showPasswordResetForm();
-  }
-
-  history.replaceState(null, '', window.location.pathname + window.location.search);
 }
 
 // ----------------------------------------------------------------------------
@@ -186,7 +200,13 @@ document.getElementById('resetPasswordForm').addEventListener('submit', async (e
   if(newPassword.length < 8){ note.innerText = 'Use at least 8 characters.'; return; }
   note.innerText = 'Saving…';
   const error = await setNewPassword(newPassword);
-  note.innerText = error ? error.message : 'Password set — you\'re signed in.';
+  if(error){
+    note.innerText = error.message;
+    return;
+  }
+  note.innerText = 'Password set — signing you in…';
+  showAuthUI();     // currentUser/currentProfile were already populated during PASSWORD_RECOVERY
+  await loadAllData();
 });
 
 document.getElementById('magicLinkForm').addEventListener('submit', async (e) => {

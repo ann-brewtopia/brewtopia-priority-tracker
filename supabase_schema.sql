@@ -110,6 +110,10 @@ create policy "a user can edit their own ticket"
   on public.members for update
   using (owner_user_id = auth.uid());
 
+create policy "a user can delete their own ticket"
+  on public.members for delete
+  using (owner_user_id = auth.uid());
+
 -- Claiming an unclaimed ticket ("This is me") — allowed for anyone, but only
 -- while it's still unclaimed, and only to claim it as their own (can't hand
 -- it to someone else).

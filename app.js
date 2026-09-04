@@ -442,9 +442,17 @@ function statusButtonsHtml(status, dataAttrs, editable){
 }
 
 (async function boot(){
-  await initAuth();
-  if(currentUser){
-    await loadAllData();
-    subscribeToRealtimeUpdates();
+  try{
+    await initAuth();
+    if(currentUser){
+      await loadAllData();
+      subscribeToRealtimeUpdates();
+    }
+  }catch(err){
+    // Anything unexpected during startup — surfaced visibly rather than
+    // leaving the page looking like it's just not responding to clicks.
+    console.error('Startup failed:', err);
+    const note = document.getElementById('magicLinkNote') || document.getElementById('passwordNote');
+    if(note) note.innerText = 'Something went wrong loading the app: ' + (err && err.message ? err.message : err);
   }
 })();
