@@ -1473,9 +1473,1128 @@
   }
 </script>
 
-<script src="js/supabase-client.js"></script>
-<script src="js/auth.js"></script>
-<script src="js/data.js"></script>
-<script src="js/app.js"></script>
+<!-- ============================================================================
+     Everything below is inlined directly rather than loaded as separate
+     js/*.js files. This deployment hit TWO separate incidents of a static
+     asset (first the CSS, then all four JS files) 404ing on the live
+     Vercel deployment despite being correct in the source — almost
+     certainly a repo/deployment path issue, not a code bug, but one that
+     kept silently breaking everything with zero on-screen indication of
+     why. Rather than keep chasing Vercel/GitHub folder-structure config,
+     this removes the failure mode entirely: a single self-contained
+     index.html has nothing separate left to fail to load, the same
+     approach already used for the CSS and the same approach the original
+     Claude-artifact version used successfully the whole time.
+     ============================================================================ -->
+<script>
+// ============================== supabase-client.js ==============================
+// ============================================================================
+// Supabase client setup
+// ============================================================================
+// Fill these in once the Supabase project exists (Project Settings → API).
+// The anon key is meant to be public — it's safe to ship in client-side code
+// because Row Level Security (see supabase_schema.sql) is what actually
+// controls who can read/write what, not this key.
+const SUPABASE_URL = 'YOUR_SUPABASE_PROJECT_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+
+// "Remember me" — a real implementation, not a decorative checkbox. Supabase
+// always persists a session somewhere; the question is just *where*.
+// Checked = localStorage (survives closing the browser). Unchecked =
+// sessionStorage (gone once the tab/browser closes). Whichever the person
+// picked on the login screen is written here BEFORE sign-in, so the client
+// below reads it and stores the new session in the right place.
+const REMEMBER_ME_PREF_KEY = 'pt_remember_me';
+
+function setRememberMePreference(remember){
+  try{ localStorage.setItem(REMEMBER_ME_PREF_KEY, remember ? 'true' : 'false'); }catch(e){}
+}
+
+const rememberAwareStorage = {
+  getItem(key){
+    const remember = localStorage.getItem(REMEMBER_ME_PREF_KEY) !== 'false'; // default: remembered
+    return (remember ? window.localStorage : window.sessionStorage).getItem(key);
+  },
+  setItem(key, value){
+    const remember = localStorage.getItem(REMEMBER_ME_PREF_KEY) !== 'false';
+    (remember ? window.localStorage : window.sessionStorage).setItem(key, value);
+  },
+  removeItem(key){
+    window.localStorage.removeItem(key);
+    window.sessionStorage.removeItem(key);
+  }
+};
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    storage: rememberAwareStorage,
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true
+  }
+});
+
+
+// ============================== auth.js ==============================
+// ============================================================================
+// Auth — replaces the old "claim your ticket" soft identity picker with a
+// real signed-in user. There's no more per-browser guessing: whoever is
+// signed in IS the identity, enforced server-side by Row Level Security,
+// not just hidden by the UI.
+//
+// Two sign-in methods, both against the same email:
+//   - Password (default tab) — a normal email + password + "remember me."
+//   - Magic link — the original no-password option, kept as an alternative.
+// There's no separate "username" — the email address IS the identifier,
+// same as it already was for magic link. Adding a second, disconnected
+// username system would just be two sources of truth for one person.
+// ============================================================================
+
+let currentUser = null;     // the Supabase auth user object, or null if signed out
+let currentProfile = null;  // { id, full_name, role } from public.profiles
+
+async function initAuth(){
+  handleUrlAuthSignals(); // expired/invalid link errors only — see note below
+
+  const { data: { session } } = await supabase.auth.getSession();
+  if(session){
+    await loadCurrentProfile(session.user);
+  }
+  showAuthUI();
+
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    // Fires once Supabase has actually validated the recovery link and
+    // established a real session from it — this is the reliable signal to
+    // show the "set new password" form, not guessing from the URL.
+    if(event === 'PASSWORD_RECOVERY'){
+      await loadCurrentProfile(session.user); // populated now, so we can drop them into the app right after they set a password
+      showPasswordResetForm();
+      return;
+    }
+    if(session){
+      await loadCurrentProfile(session.user);
+    }else{
+      currentUser = null;
+      currentProfile = null;
+    }
+    showAuthUI();
+    if(session) await loadAllData();
+  });
+}
+
+async function loadCurrentProfile(user){
+  currentUser = user;
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, full_name, role')
+    .eq('id', user.id)
+    .single();
+  if(error){
+    console.error('Could not load profile', error);
+    currentProfile = { id: user.id, full_name: user.email, role: 'member' };
+  }else{
+    currentProfile = data;
+  }
+}
+
+function isAdmin(){
+  return !!currentProfile && currentProfile.role === 'admin';
+}
+
+// ----------------------------------------------------------------------------
+// Supabase reports an expired/invalid magic link as an error in the URL's
+// hash fragment (#error=access_denied&error_code=otp_expired&...). Left
+// alone, that just lands on a blank login form with zero explanation —
+// which is exactly what happened. This reads the hash once on load and
+// shows something useful.
+//
+// Password-recovery links are handled separately, in initAuth() below, via
+// Supabase's own PASSWORD_RECOVERY event — NOT by parsing the hash here.
+// An earlier version of this function also tried to detect `type=recovery`
+// in the hash and immediately cleared it with history.replaceState(). That
+// was a real bug: the hash contains the actual session tokens the recovery
+// link grants, and Supabase's client needs to read them itself
+// (detectSessionInUrl) before they're gone. Wiping the hash early meant the
+// "set new password" form displayed correctly, but with no real session
+// behind it — so saving a new password silently had nothing to save it to.
+// ----------------------------------------------------------------------------
+function handleUrlAuthSignals(){
+  const hash = window.location.hash;
+  if(!hash || hash.length < 2) return;
+  const params = new URLSearchParams(hash.slice(1));
+
+  if(params.get('error')){
+    const desc = (params.get('error_description') || 'That sign-in link is invalid.').replace(/\+/g, ' ');
+    const note = document.getElementById('magicLinkNote');
+    if(note) note.innerText = params.get('error_code') === 'otp_expired'
+      ? 'That link expired before it was opened — request a new one below.'
+      : desc;
+    // Safe to clean up here — an error means there's no valid session token
+    // in this hash to protect.
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Password sign-in
+// ----------------------------------------------------------------------------
+async function signInWithPassword(email, password, remember){
+  setRememberMePreference(remember);
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  return error;
+}
+
+// For someone who's only ever used the magic link and has no password yet —
+// sends a reset-password email, which doubles as a "set your first password"
+// link (Supabase doesn't distinguish "reset" from "set for the first time").
+async function requestPasswordReset(email){
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin
+  });
+  return error;
+}
+
+async function setNewPassword(password){
+  const { error } = await supabase.auth.updateUser({ password });
+  return error;
+}
+
+// ----------------------------------------------------------------------------
+// Magic link (kept as the alternative option)
+// ----------------------------------------------------------------------------
+async function sendMagicLink(email){
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: window.location.origin }
+  });
+  return error;
+}
+
+async function signOut(){
+  await supabase.auth.signOut();
+}
+
+// ----------------------------------------------------------------------------
+// UI wiring
+// ----------------------------------------------------------------------------
+function showAuthUI(){
+  const loginScreen = document.getElementById('loginScreen');
+  const appRoot = document.getElementById('appRoot');
+  if(currentUser){
+    loginScreen.style.display = 'none';
+    appRoot.style.display = '';
+    const label = document.getElementById('currentUserLabel');
+    if(label){
+      label.innerHTML = `Signed in as <strong>${escapeHtml(currentProfile.full_name || currentUser.email)}</strong>` +
+        (isAdmin() ? ' — Admin' : '');
+    }
+  }else{
+    loginScreen.style.display = '';
+    appRoot.style.display = 'none';
+  }
+}
+
+function showPasswordResetForm(){
+  document.getElementById('passwordTabForm').style.display = 'none';
+  document.getElementById('magicLinkForm').style.display = 'none';
+  document.getElementById('loginTabs').style.display = 'none';
+  document.getElementById('resetPasswordForm').style.display = '';
+}
+
+function switchLoginTab(tab){
+  document.getElementById('passwordTabForm').style.display = tab === 'password' ? '' : 'none';
+  document.getElementById('magicLinkForm').style.display = tab === 'magiclink' ? '' : 'none';
+  document.querySelectorAll('.login-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+}
+document.querySelectorAll('.login-tab').forEach(t => {
+  t.addEventListener('click', () => switchLoginTab(t.dataset.tab));
+});
+
+document.getElementById('passwordTabForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('passwordEmail').value.trim();
+  const password = document.getElementById('passwordInput').value;
+  const remember = document.getElementById('rememberMeCheckbox').checked;
+  const note = document.getElementById('passwordNote');
+  note.innerText = 'Signing in…';
+  const error = await signInWithPassword(email, password, remember);
+  note.innerText = error ? `Couldn't sign in: ${error.message}` : '';
+});
+
+document.getElementById('forgotPasswordLink').addEventListener('click', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('passwordEmail').value.trim();
+  const note = document.getElementById('passwordNote');
+  if(!email){ note.innerText = 'Enter your email above first, then click this again.'; return; }
+  note.innerText = 'Sending a link to set your password…';
+  const error = await requestPasswordReset(email);
+  note.innerText = error ? `Couldn't send that: ${error.message}` : `Check ${email} for a link to set your password.`;
+});
+
+document.getElementById('resetPasswordForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const newPassword = document.getElementById('newPasswordInput').value;
+  const note = document.getElementById('resetPasswordNote');
+  if(newPassword.length < 8){ note.innerText = 'Use at least 8 characters.'; return; }
+  note.innerText = 'Saving…';
+  const error = await setNewPassword(newPassword);
+  if(error){
+    note.innerText = error.message;
+    return;
+  }
+  note.innerText = 'Password set — signing you in…';
+  showAuthUI();     // currentUser/currentProfile were already populated during PASSWORD_RECOVERY
+  await loadAllData();
+});
+
+document.getElementById('magicLinkForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const emailInput = document.getElementById('magicLinkEmail');
+  const note = document.getElementById('magicLinkNote');
+  const email = emailInput.value.trim();
+  if(!email) return;
+  note.innerText = 'Sending…';
+  const error = await sendMagicLink(email);
+  note.innerText = error
+    ? `Couldn't send that: ${error.message}`
+    : `Check ${email} for a sign-in link.`;
+});
+
+document.getElementById('signOutBtn').addEventListener('click', signOut);
+
+
+// ============================== data.js ==============================
+// ============================================================================
+// Data layer — this file is the actual replacement for window.storage.
+// Everything in here talks to Supabase; nothing in app.js (the rendering
+// code) touches the database directly. That split is deliberate: it means
+// the rendering/UI code barely had to change from the original Claude-artifact
+// version, since it still just operates on in-memory arrays (members, p1s,
+// followups) exactly like before — only how those arrays get filled and
+// saved is different.
+// ============================================================================
+
+let members = [];    // [{ id, name, title, day_schedule, priorities: [...] }]
+let p1s = [];         // from the p1s_with_live_text view
+let followups = [];   // [{ id, owner_name, due, entries: [...] }]
+
+function todayMondayStr(){
+  const d = new Date();
+  const day = d.getDay();
+  const diff = (day === 0 ? -6 : 1) - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0,0,0,0);
+  return d.toISOString().slice(0,10);
+}
+let currentWeekStart = todayMondayStr();
+
+function escapeHtml(str){
+  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ----------------------------------------------------------------------------
+// Load everything needed for the currently-ported tabs (Home + Daily
+// Priorities). KPIs/History/Users/Help aren't wired up to real data yet —
+// see the README for what's next.
+// ----------------------------------------------------------------------------
+async function loadAllData(){
+  await checkForWeekRollover();
+
+  const { data: memberRows, error: memberErr } = await supabase
+    .from('members')
+    .select('*')
+    .order('created_at', { ascending: true });
+  if(memberErr){ console.error(memberErr); return; }
+
+  const { data: priorityRows, error: priorityErr } = await supabase
+    .from('priorities')
+    .select('*')
+    .eq('week_start', currentWeekStart);
+  if(priorityErr){ console.error(priorityErr); return; }
+
+  members = memberRows.map(m => ({
+    ...m,
+    priorities: priorityRows.filter(p => p.member_id === m.id)
+  }));
+
+  const { data: p1Rows, error: p1Err } = await supabase
+    .from('p1s_with_live_text')
+    .select('*')
+    .order('created_at', { ascending: true });
+  if(p1Err) console.error(p1Err);
+  p1s = p1Rows || [];
+
+  const { data: followupRows, error: fErr } = await supabase
+    .from('followups')
+    .select('*')
+    .order('created_at', { ascending: true });
+  if(fErr) console.error(fErr);
+
+  const { data: entryRows, error: eErr } = await supabase
+    .from('followup_entries_with_live_link')
+    .select('*')
+    .order('created_at', { ascending: true });
+  if(eErr) console.error(eErr);
+
+  followups = (followupRows || []).map(f => ({
+    ...f,
+    entries: (entryRows || []).filter(e => e.followup_id === f.id)
+  }));
+
+  await loadKpiData();
+
+  renderAll(); // defined in app.js
+}
+
+// ----------------------------------------------------------------------------
+// Week rollover — no global "current week" pointer to advance anymore
+// (every client just computes todayMondayStr() itself). This function's only
+// job is to make sure unfinished priorities actually carry forward as new
+// rows for the new week, since a brand-new Monday otherwise starts empty.
+// Guarded so it only carries forward once per member per week, even if this
+// runs on every page load.
+// ----------------------------------------------------------------------------
+async function checkForWeekRollover(){
+  const monday = todayMondayStr();
+  currentWeekStart = monday;
+
+  const { data: alreadyThisWeek } = await supabase
+    .from('priorities').select('member_id').eq('week_start', monday);
+  const alreadyHandled = new Set((alreadyThisWeek || []).map(p => p.member_id));
+
+  const { data: memberRows } = await supabase.from('members').select('id');
+  for(const m of (memberRows || [])){
+    if(alreadyHandled.has(m.id)) continue; // this member already has rows for this week
+
+    const { data: priorWeeks } = await supabase
+      .from('priorities')
+      .select('week_start')
+      .eq('member_id', m.id)
+      .lt('week_start', monday)
+      .order('week_start', { ascending: false })
+      .limit(1);
+    if(!priorWeeks || priorWeeks.length === 0) continue; // nothing to carry forward
+
+    const lastWeek = priorWeeks[0].week_start;
+    const { data: unfinished } = await supabase
+      .from('priorities')
+      .select('*')
+      .eq('member_id', m.id)
+      .eq('week_start', lastWeek)
+      .neq('status', 'completed')
+      .not('text', 'eq', '');
+
+    for(const p of (unfinished || [])){
+      await supabase.from('priorities').insert({
+        member_id: m.id,
+        week_start: monday,
+        day: 'Mon',
+        text: p.text,
+        status: p.status,
+        due: p.due,
+        carried_weeks: (p.carried_weeks || 0) + 1
+      });
+    }
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Members
+// ----------------------------------------------------------------------------
+async function createMember(name){
+  const { data, error } = await supabase
+    .from('members')
+    .insert({ name, title: '', owner_user_id: currentUser.id })
+    .select().single();
+  if(error){ console.error(error); return null; }
+  await loadAllData();
+  return data;
+}
+
+async function claimTicket(memberId){
+  const { error } = await supabase
+    .from('members')
+    .update({ owner_user_id: currentUser.id })
+    .eq('id', memberId)
+    .is('owner_user_id', null); // RLS also enforces this — belt and suspenders
+  if(error) console.error(error);
+  await loadAllData();
+}
+
+async function updateMember(memberId, fields){
+  const { error } = await supabase.from('members').update(fields).eq('id', memberId);
+  if(error) console.error(error);
+}
+
+async function deleteMember(memberId){
+  const { error } = await supabase.from('members').delete().eq('id', memberId);
+  if(error){ console.error(error); return; }
+  await loadAllData();
+}
+
+function canEditTicket(member){
+  return isAdmin() || member.owner_user_id === (currentUser && currentUser.id);
+}
+
+// ----------------------------------------------------------------------------
+// Priorities
+// ----------------------------------------------------------------------------
+async function addPriority(memberId, day){
+  const { error } = await supabase.from('priorities').insert({
+    member_id: memberId, week_start: currentWeekStart, day, text: ''
+  });
+  if(error) console.error(error);
+  await loadAllData();
+}
+
+async function updatePriority(priorityId, fields){
+  const { error } = await supabase.from('priorities').update(fields).eq('id', priorityId);
+  if(error) console.error(error);
+}
+
+async function deletePriority(priorityId){
+  const { error } = await supabase.from('priorities').delete().eq('id', priorityId);
+  if(error) console.error(error);
+  await loadAllData();
+}
+
+// Flag toggle — matches the v7 fix: clicking an already-flagged priority
+// offers to remove it from Team P1s instead of creating a duplicate.
+async function togglePriorityFlag(priority, memberName){
+  const existing = p1s.find(p => p.source_priority_id === priority.id);
+  if(existing){
+    await supabase.from('p1s').delete().eq('id', existing.id);
+    await supabase.from('priorities').update({ flagged: false }).eq('id', priority.id);
+  }else{
+    await supabase.from('p1s').insert({
+      text: `${memberName}: ${priority.text}`,
+      owner_name: memberName,
+      source_priority_id: priority.id,
+      auto_text: true
+    });
+    await supabase.from('priorities').update({ flagged: true }).eq('id', priority.id);
+  }
+  await loadAllData();
+}
+
+// ----------------------------------------------------------------------------
+// P1s
+// ----------------------------------------------------------------------------
+async function addP1(){
+  const { error } = await supabase.from('p1s').insert({ text: '', owner_name: '' });
+  if(error) console.error(error);
+  await loadAllData();
+}
+
+async function updateP1(id, fields){
+  // Editing the text by hand detaches it from the source priority — otherwise
+  // a manual edit would just get overwritten next time the view re-reads the
+  // live join.
+  if(fields.text !== undefined) fields.auto_text = false;
+  const { error } = await supabase.from('p1s').update(fields).eq('id', id);
+  if(error) console.error(error);
+}
+
+async function deleteP1(id){
+  const p1 = p1s.find(p => p.id === id);
+  const { error } = await supabase.from('p1s').delete().eq('id', id);
+  if(error) console.error(error);
+  if(p1 && p1.source_priority_id){
+    await supabase.from('priorities').update({ flagged: false }).eq('id', p1.source_priority_id);
+  }
+  await loadAllData();
+}
+
+// ----------------------------------------------------------------------------
+// Follow-ups
+// ----------------------------------------------------------------------------
+async function addFollowup(){
+  const { data, error } = await supabase.from('followups').insert({ owner_name: '' }).select().single();
+  if(error){ console.error(error); return; }
+  await supabase.from('followup_entries').insert({ followup_id: data.id, text: '' });
+  await loadAllData();
+}
+
+async function addFollowupEntry(followupId){
+  const { error } = await supabase.from('followup_entries').insert({ followup_id: followupId, text: '' });
+  if(error) console.error(error);
+  await loadAllData();
+}
+
+async function updateFollowup(id, fields){
+  const { error } = await supabase.from('followups').update(fields).eq('id', id);
+  if(error) console.error(error);
+}
+
+async function updateFollowupEntry(id, fields){
+  const { error } = await supabase.from('followup_entries').update(fields).eq('id', id);
+  if(error) console.error(error);
+}
+
+async function deleteFollowup(id){
+  const { error } = await supabase.from('followups').delete().eq('id', id);
+  if(error) console.error(error);
+  await loadAllData();
+}
+
+async function deleteFollowupEntry(id, followupId){
+  await supabase.from('followup_entries').delete().eq('id', id);
+  const remaining = await supabase.from('followup_entries').select('id').eq('followup_id', followupId);
+  if(remaining.data && remaining.data.length === 0){
+    await supabase.from('followups').delete().eq('id', followupId); // don't leave an empty card behind
+  }
+  await loadAllData();
+}
+
+// ----------------------------------------------------------------------------
+// Realtime — this is a genuine upgrade over the old app, not a port. The
+// Claude-artifact version had no way to know when someone else's browser
+// changed something; it needed a manual "Refresh" button. Supabase can push
+// changes to every open tab the moment they happen.
+// ----------------------------------------------------------------------------
+function subscribeToRealtimeUpdates(){
+  supabase.channel('priority-tracker-changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, loadAllData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'priorities' }, loadAllData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'p1s' }, loadAllData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'followups' }, loadAllData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'followup_entries' }, loadAllData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'kpi_people' }, loadAllData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'kpi_items' }, loadAllData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'kpi_notes' }, loadAllData)
+    .subscribe();
+}
+
+// ----------------------------------------------------------------------------
+// KPIs — private by default. RLS is what actually enforces this (see
+// supabase_schema.sql): the query below just asks for "everything I'm
+// allowed to see," and Postgres decides what that is per the signed-in
+// user. An admin gets every row; anyone else gets only their own row, and
+// only once it's been shared — the same select, with completely different
+// results depending on who's asking. That's the whole privacy fix.
+// ----------------------------------------------------------------------------
+let kpiRoster = [];
+
+async function loadKpiData(){
+  const { data: people, error } = await supabase
+    .from('kpi_people')
+    .select('*, kpi_items(*, kpi_notes(*))')
+    .order('department', { ascending: true });
+  if(error){ console.error(error); kpiRoster = []; return; }
+
+  kpiRoster = people.map(p => ({
+    ...p,
+    kpis: (p.kpi_items || [])
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map(item => ({
+        ...item,
+        notesByWeek: Object.fromEntries((item.kpi_notes || []).map(n => [n.week_start, n.notes]))
+      }))
+  }));
+}
+
+// Admin-only from here down — matches canEditKpis() being admin-only in the
+// original app. RLS backs this up regardless of what the UI allows.
+async function createKpiPerson(name, position, department){
+  const { error } = await supabase.from('kpi_people').insert({ name, position, department });
+  if(error) console.error(error);
+  await loadKpiData();
+}
+
+async function addKpiItem(personId, title){
+  const person = kpiRoster.find(p => p.id === personId);
+  const sortOrder = person ? person.kpis.length : 0;
+  const { error } = await supabase.from('kpi_items').insert({ kpi_person_id: personId, title, sort_order: sortOrder });
+  if(error) console.error(error);
+  await loadKpiData();
+}
+
+async function toggleKpiShare(personId, shared){
+  const { error } = await supabase.from('kpi_people').update({ shared_with_owner: shared }).eq('id', personId);
+  if(error) console.error(error);
+  await loadKpiData();
+}
+
+async function linkKpiPersonToUser(personId, userId){
+  const { error } = await supabase.from('kpi_people').update({ linked_user_id: userId || null }).eq('id', personId);
+  if(error) console.error(error);
+  await loadKpiData();
+}
+
+async function saveKpiNote(itemId, weekStart, notes){
+  const { error } = await supabase
+    .from('kpi_notes')
+    .upsert({ kpi_item_id: itemId, week_start: weekStart, notes }, { onConflict: 'kpi_item_id,week_start' });
+  if(error) console.error(error);
+}
+
+async function loadAllProfiles(){
+  const { data, error } = await supabase.from('profiles').select('id, full_name').order('full_name');
+  if(error){ console.error(error); return []; }
+  return data;
+}
+
+
+// ============================== app.js ==============================
+// ============================================================================
+// Rendering — this is largely PORTED, not rewritten. The original Claude-
+// artifact app's rendering code only ever touched in-memory arrays; it never
+// cared where those arrays came from. So this file looks close to the
+// original tracker's render functions, with two real differences:
+//   1. Every write goes through data.js's Supabase functions instead of
+//      window.storage.
+//   2. Permission checks (canEditTicket) are still done here for the UI
+//      (disabling buttons, etc.) — but the REAL enforcement is server-side
+//      via Row Level Security now. If you disabled the JS check entirely,
+//      the database would still refuse the write. That's new, and it's the
+//      whole point of moving off a browser-side identity picker.
+//
+// PORTED IN THIS PASS: Home (Team P1s + Follow-Ups), Daily Priorities
+// (Cards view only).
+// NOT YET PORTED: Compact view, KPIs tab, History, Users tab, Help tab,
+// linking a priority to a follow-up. See README.md for why these were left
+// for a follow-up pass instead of guessed at without a live database to
+// test against.
+// ============================================================================
+
+const DAYS = ['Mon','Tue','Wed','Thu','Fri'];
+
+function renderAll(){
+  renderTickets();
+  renderP1s();
+  renderFollowups();
+  renderKpiTab();
+}
+
+// ---------- sidebar tab switching ----------
+document.querySelectorAll('.sidebar-item[data-tab]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar-item[data-tab]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+    document.getElementById('tab-' + btn.dataset.tab).style.display = '';
+  });
+});
+
+// ---------- Daily Priorities: ticket cards ----------
+function renderTickets(){
+  const rail = document.getElementById('ticketRail');
+  rail.innerHTML = '';
+
+  if(members.length === 0){
+    rail.innerHTML = `<div class="rail-empty">No tickets yet — each team member adds their own below.</div>`;
+  }
+
+  members.forEach(m => {
+    const editable = canEditTicket(m);
+    const ticket = document.createElement('div');
+    ticket.className = 'ticket' + (editable ? '' : ' locked');
+
+    const dayBlocks = DAYS.map(d => {
+      const entries = m.priorities.filter(p => p.day === d);
+      const entryRows = entries.map(entry => `
+        <div class="day-entry" data-entry-id="${entry.id}">
+          <div class="day-entry-main">
+            <textarea class="day-input" rows="1" data-entry-id="${entry.id}" ${editable ? '' : 'disabled'}>${escapeHtml(entry.text || '')}</textarea>
+            <button class="flag-day-btn ${entry.flagged ? 'flagged' : ''}" data-entry-id="${entry.id}" title="Send to Team P1s" ${editable ? '' : 'disabled'}>&#9873;</button>
+            <button class="due-day-btn ${entry.due ? 'has-due' : ''}" data-entry-id="${entry.id}" title="Set a due date" ${editable ? '' : 'disabled'}>&#128197;</button>
+            <button class="remove-entry-mini" data-entry-id="${entry.id}" title="Remove this priority" ${editable ? '' : 'disabled'}>&times;</button>
+          </div>
+          ${statusButtonsHtml(entry.status, `data-entry-id="${entry.id}"`, editable)}
+          ${entry.due ? `<div class="day-due-chip">&#128197; Due ${entry.due}</div>` : ''}
+          ${entry.carried_weeks ? `<div class="carried-badge">&#8635; Week ${entry.carried_weeks + 1}</div>` : ''}
+        </div>
+      `).join('');
+      const emptyNote = entries.length === 0 ? `<div class="day-empty-note">No priorities yet</div>` : '';
+      const sched = (m.day_schedule && m.day_schedule[d]) || 'office';
+      const schedLabels = { office: 'Office', remote: 'Remote', off: 'Off' };
+      return `
+        <div class="day-block ${sched === 'off' ? 'off' : ''}">
+          <div class="day-block-label-row">
+            <span class="day-block-label">${d}</span>
+            <button class="dayschedule-btn active ${sched}" data-day="${d}" ${editable ? '' : 'disabled'}>${schedLabels[sched]}</button>
+          </div>
+          <div class="day-entries">${entryRows}${emptyNote}</div>
+          <button class="add-mini-btn add-day-entry-btn" data-day="${d}" ${editable ? '' : 'disabled'}>+ Add priority</button>
+        </div>
+      `;
+    }).join('');
+
+    const lockNote = editable ? '' : `<div class="ticket-lock-note">&#128274; Only ${escapeHtml(m.name || 'this person')} (or admin) can edit this</div>`;
+
+    ticket.innerHTML = `
+      ${lockNote}
+      <div class="ticket-top">
+        <div style="flex:1">
+          <input class="name" value="${escapeHtml(m.name)}" placeholder="Name" ${editable ? '' : 'disabled'} />
+          <input class="role" value="${escapeHtml(m.title)}" placeholder="Role" ${editable ? '' : 'disabled'} />
+        </div>
+        ${editable ? '<button class="remove-x" title="Remove ticket">&times;</button>' : ''}
+      </div>
+      <div class="field-label">Daily Priorities</div>
+      <div class="day-grid">${dayBlocks}</div>
+    `;
+
+    if(editable){
+      ticket.querySelector('.name').addEventListener('change', e => updateMember(m.id, { name: e.target.value }));
+      ticket.querySelector('.role').addEventListener('change', e => updateMember(m.id, { title: e.target.value }));
+
+      ticket.querySelectorAll('.day-input').forEach(inp => {
+        inp.addEventListener('change', e => updatePriority(e.target.dataset.entryId, { text: e.target.value }));
+      });
+      ticket.querySelectorAll('.status-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await updatePriority(btn.dataset.entryId, { status: btn.dataset.status });
+          await loadAllData();
+        });
+      });
+      ticket.querySelectorAll('.flag-day-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const entry = m.priorities.find(p => p.id === btn.dataset.entryId);
+          if(!entry || !(entry.text || '').trim()){ alert('Add text to this priority before flagging it.'); return; }
+          await togglePriorityFlag(entry, m.name);
+        });
+      });
+      ticket.querySelectorAll('.due-day-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const date = prompt('Due date (YYYY-MM-DD), blank to clear:');
+          if(date === null) return;
+          await updatePriority(btn.dataset.entryId, { due: date || null });
+          await loadAllData();
+        });
+      });
+      ticket.querySelectorAll('.remove-entry-mini').forEach(btn => {
+        btn.addEventListener('click', () => deletePriority(btn.dataset.entryId));
+      });
+      ticket.querySelectorAll('.add-day-entry-btn').forEach(btn => {
+        btn.addEventListener('click', () => addPriority(m.id, btn.dataset.day));
+      });
+      ticket.querySelectorAll('.dayschedule-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const cycle = ['office','remote','off'];
+          const day = btn.dataset.day;
+          const current = (m.day_schedule && m.day_schedule[day]) || 'office';
+          const next = cycle[(cycle.indexOf(current) + 1) % cycle.length];
+          const updatedSchedule = { ...(m.day_schedule || {}), [day]: next };
+          await updateMember(m.id, { day_schedule: updatedSchedule });
+          await loadAllData();
+        });
+      });
+      const removeBtn = ticket.querySelector('.remove-x');
+      if(removeBtn){
+        removeBtn.addEventListener('click', () => {
+          if(confirm(`Remove ${m.name || 'this ticket'}? This can't be undone.`)) deleteMember(m.id);
+        });
+      }
+    }
+
+    rail.appendChild(ticket);
+  });
+
+  const addBtn = document.createElement('div');
+  addBtn.className = 'add-ticket';
+  addBtn.innerText = '+ Add team member';
+  addBtn.addEventListener('click', async () => {
+    const name = prompt('Name for the new ticket:');
+    if(name) await createMember(name);
+  });
+  rail.appendChild(addBtn);
+}
+
+// ---------- Home: Team P1s table ----------
+function renderP1s(){
+  const tbody = document.getElementById('p1TableBody');
+  if(!tbody) return;
+  tbody.innerHTML = '';
+
+  if(p1s.length === 0){
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-note">Nothing here yet.</div></td></tr>`;
+    return;
+  }
+
+  p1s.forEach(item => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td><input class="line-text" value="${escapeHtml(item.text)}" placeholder="What is it, and whose P1 is it?" /></td>
+      <td><input class="line-owner" value="${escapeHtml(item.owner_name || '')}" placeholder="Owner" /></td>
+      <td><input type="date" class="line-due" value="${item.due || ''}" /></td>
+      <td>${statusButtonsHtml(item.status, `data-p1-id="${item.id}"`, true)}</td>
+      <td><button class="remove-x" title="Remove">&times;</button></td>
+    `;
+    row.querySelector('.line-text').addEventListener('change', e => updateP1(item.id, { text: e.target.value }));
+    row.querySelector('.line-owner').addEventListener('change', e => updateP1(item.id, { owner_name: e.target.value }));
+    row.querySelector('.line-due').addEventListener('change', e => updateP1(item.id, { due: e.target.value || null }));
+    row.querySelectorAll('.status-btn').forEach(btn => {
+      btn.addEventListener('click', async () => { await updateP1(item.id, { status: btn.dataset.status }); await loadAllData(); });
+    });
+    row.querySelector('.remove-x').addEventListener('click', () => deleteP1(item.id));
+    tbody.appendChild(row);
+  });
+}
+
+document.getElementById('addP1').addEventListener('click', addP1);
+
+// ---------- Home: Follow-Ups ----------
+function renderFollowups(){
+  const list = document.getElementById('followupList');
+  if(!list) return;
+  list.innerHTML = '';
+
+  if(followups.length === 0){
+    list.innerHTML = `<div class="empty-note">Nothing here yet.</div>`;
+    return;
+  }
+
+  followups.forEach(f => {
+    const card = document.createElement('div');
+    card.className = 'followup-card';
+    const entryRows = f.entries.map(e => `
+      <div class="followup-entry" data-entry-id="${e.id}">
+        <div class="followup-entry-main">
+          <input class="line-text" data-entry-id="${e.id}" value="${escapeHtml(e.text)}" placeholder="Follow-up item" />
+          <button class="remove-entry-mini" data-entry-id="${e.id}" title="Remove this item">&times;</button>
+        </div>
+        ${statusButtonsHtml(e.status, `data-entry-id="${e.id}"`, true)}
+        ${e.linked_priority_text ? `<div class="link-tag">&#128279; ${escapeHtml(e.linked_member_name || '')} &middot; ${escapeHtml(e.linked_day || '')}: ${escapeHtml(e.linked_priority_text)}</div>` : ''}
+      </div>
+    `).join('');
+
+    card.innerHTML = `
+      <div class="followup-card-top">
+        <input class="line-owner" value="${escapeHtml(f.owner_name || '')}" placeholder="Owner" />
+        <input type="date" class="line-due" value="${f.due || ''}" />
+        <button class="remove-x" title="Remove this whole follow-up">&times;</button>
+      </div>
+      <div class="followup-entries">${entryRows}</div>
+      <button class="add-mini-btn add-followup-entry-btn">+ Add item</button>
+    `;
+
+    card.querySelector('.line-owner').addEventListener('change', e => updateFollowup(f.id, { owner_name: e.target.value }));
+    card.querySelector('.line-due').addEventListener('change', e => updateFollowup(f.id, { due: e.target.value || null }));
+    card.querySelectorAll('.followup-entry-main .line-text').forEach(inp => {
+      inp.addEventListener('change', e => updateFollowupEntry(e.target.dataset.entryId, { text: e.target.value }));
+    });
+    card.querySelectorAll('.status-btn').forEach(btn => {
+      btn.addEventListener('click', async () => { await updateFollowupEntry(btn.dataset.entryId, { status: btn.dataset.status }); await loadAllData(); });
+    });
+    card.querySelectorAll('.remove-entry-mini').forEach(btn => {
+      btn.addEventListener('click', () => deleteFollowupEntry(btn.dataset.entryId, f.id));
+    });
+    card.querySelector('.remove-x').addEventListener('click', () => {
+      if(confirm('Remove this whole follow-up?')) deleteFollowup(f.id);
+    });
+    card.querySelector('.add-followup-entry-btn').addEventListener('click', () => addFollowupEntry(f.id));
+
+    list.appendChild(card);
+  });
+}
+
+document.getElementById('addFollowup').addEventListener('click', addFollowup);
+
+// ---------- KPIs ----------
+// Ranks a position by seniority so higher roles sort above others within a
+// department — ported unchanged from the artifact version.
+function positionRank(position){
+  const p = (position || '').toLowerCase();
+  if(p.includes('vp')) return 1;
+  if(p.includes('director')) return 2;
+  if(p.includes('manager')) return 3;
+  return 4;
+}
+function sortKpiRoster(people){
+  return [...people].sort((a, b) => {
+    const rankDiff = positionRank(a.position) - positionRank(b.position);
+    if(rankDiff !== 0) return rankDiff;
+    const posCompare = (a.position || '').localeCompare(b.position || '');
+    if(posCompare !== 0) return posCompare;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+}
+
+let kpiActiveDept = null;
+let kpiSelectedWeek = null;
+let kpiSearchTerm = '';
+
+function allKnownKpiWeeks(){
+  const weeks = new Set([currentWeekStart]);
+  kpiRoster.forEach(p => p.kpis.forEach(k => Object.keys(k.notesByWeek || {}).forEach(w => weeks.add(w))));
+  return [...weeks].sort().reverse();
+}
+
+function renderKpiAdminPanel(){
+  const panel = document.getElementById('kpiAdminPanel');
+  panel.style.display = isAdmin() ? '' : 'none';
+}
+
+function renderKpiWeekSelect(){
+  const select = document.getElementById('kpiWeekSelect');
+  if(!select) return;
+  if(!kpiSelectedWeek) kpiSelectedWeek = currentWeekStart;
+  const weeks = allKnownKpiWeeks();
+  select.innerHTML = weeks.map(w =>
+    `<option value="${w}" ${w === kpiSelectedWeek ? 'selected' : ''}>Week of ${w}${w === currentWeekStart ? ' (current)' : ''}</option>`
+  ).join('');
+  select.onchange = () => { kpiSelectedWeek = select.value; renderKpiTable(); };
+}
+
+function renderKpiDeptTabs(){
+  const row = document.getElementById('kpiDeptTabs');
+  if(!row) return;
+  const departments = [];
+  kpiRoster.forEach(p => { if(!departments.includes(p.department)) departments.push(p.department); });
+  if(departments.length === 0){ row.innerHTML = ''; return; }
+  if(!kpiActiveDept || !departments.includes(kpiActiveDept)) kpiActiveDept = departments[0];
+
+  row.innerHTML = '';
+  departments.forEach(dept => {
+    const btn = document.createElement('button');
+    btn.className = 'kpi-dept-tab' + (dept === kpiActiveDept ? ' active' : '');
+    btn.innerText = dept;
+    btn.addEventListener('click', () => { kpiActiveDept = dept; kpiSearchTerm = ''; document.getElementById('kpiSearchInput').value = ''; renderKpiDeptTabs(); renderKpiTable(); });
+    row.appendChild(btn);
+  });
+}
+
+function renderKpiTable(){
+  const body = document.getElementById('kpiTabBody');
+  if(!body) return;
+
+  if(kpiRoster.length === 0){
+    body.innerHTML = `<div class="empty-note">${isAdmin() ? 'No one on the KPI roster yet — add someone above.' : 'No KPIs have been shared with you yet.'}</div>`;
+    return;
+  }
+
+  if(!kpiSelectedWeek) kpiSelectedWeek = currentWeekStart;
+  const week = kpiSelectedWeek;
+  const departments = [];
+  kpiRoster.forEach(p => { if(!departments.includes(p.department)) departments.push(p.department); });
+  if(!kpiActiveDept || !departments.includes(kpiActiveDept)) kpiActiveDept = departments[0];
+
+  const term = kpiSearchTerm.trim().toLowerCase();
+  const visibleRoster = sortKpiRoster(
+    kpiRoster
+      .filter(p => p.department === kpiActiveDept)
+      .filter(p => !term || (p.name || '').toLowerCase().includes(term))
+  );
+
+  if(visibleRoster.length === 0){
+    body.innerHTML = `<div class="empty-note">No matches in ${escapeHtml(kpiActiveDept)}.</div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <table class="kpi-table">
+      <thead><tr><th class="kpi-person-col">Person</th><th>KPI #1</th><th>KPI #2</th><th>KPI #3</th><th>KPI #4</th></tr></thead>
+      <tbody id="kpiTableBody"></tbody>
+    </table>
+  `;
+  const tbody = document.getElementById('kpiTableBody');
+
+  visibleRoster.forEach(person => {
+    const row = document.createElement('tr');
+    const canEdit = isAdmin();
+    const cells = person.kpis.map(k => `
+      <td>
+        <div class="kpi-title">${escapeHtml(k.title)}</div>
+        <textarea class="kpi-notes" rows="2" data-kpi-id="${k.id}" placeholder="Notes for this week" ${canEdit ? '' : 'disabled'}>${escapeHtml((k.notesByWeek && k.notesByWeek[week]) || '')}</textarea>
+      </td>
+    `).join('');
+    const shareControls = canEdit ? `
+      <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
+        <button class="kpi-share-btn ${person.shared_with_owner ? 'shared' : ''}" data-person-id="${person.id}" style="font-size:10px; padding:3px 8px; border-radius:100px; border:1px solid var(--border); background:${person.shared_with_owner ? 'var(--on-track-bg)' : '#fff'}; color:${person.shared_with_owner ? 'var(--on-track)' : 'var(--muted)'}; cursor:pointer;">
+          ${person.shared_with_owner ? '✓ Shared with them' : '○ Private to you'}
+        </button>
+        <button class="kpi-link-btn" data-person-id="${person.id}" style="font-size:10px; padding:3px 8px; border-radius:100px; border:1px solid var(--border); background:#fff; color:var(--muted); cursor:pointer;">
+          ${person.linked_user_id ? 'Change account link' : 'Link to account'}
+        </button>
+        <button class="kpi-add-item-btn" data-person-id="${person.id}" style="font-size:10px; padding:3px 8px; border-radius:100px; border:1px dashed var(--border); background:#fff; color:var(--muted); cursor:pointer;">+ KPI</button>
+      </div>
+    ` : '';
+    row.innerHTML = `
+      <td><div class="history-name">${escapeHtml(person.name)}</div><div class="history-role">${escapeHtml(person.position)}</div>${shareControls}</td>
+      ${cells}
+    `;
+
+    row.querySelectorAll('.kpi-notes').forEach(inp => {
+      let debounceTimer;
+      inp.addEventListener('input', e => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => saveKpiNote(e.target.dataset.kpiId, week, e.target.value), 500);
+      });
+    });
+    const shareBtn = row.querySelector('.kpi-share-btn');
+    if(shareBtn) shareBtn.addEventListener('click', () => toggleKpiShare(person.id, !person.shared_with_owner).then(renderKpiTab));
+    const linkBtn = row.querySelector('.kpi-link-btn');
+    if(linkBtn) linkBtn.addEventListener('click', async () => {
+      const profiles = await loadAllProfiles();
+      const list = profiles.map(p => `${p.full_name || '(no name yet)'} — ${p.id}`).join('\n');
+      const chosenId = prompt(`Paste the id of the account to link (from the list below):\n\n${list}`);
+      if(chosenId) await linkKpiPersonToUser(person.id, chosenId.trim()).then(renderKpiTab);
+    });
+    const addItemBtn = row.querySelector('.kpi-add-item-btn');
+    if(addItemBtn) addItemBtn.addEventListener('click', async () => {
+      const title = prompt('New KPI title for ' + person.name + ':');
+      if(title) await addKpiItem(person.id, title).then(renderKpiTab);
+    });
+
+    tbody.appendChild(row);
+  });
+}
+
+function renderKpiTab(){
+  renderKpiAdminPanel();
+  renderKpiDeptTabs();
+  renderKpiWeekSelect();
+  renderKpiTable();
+}
+
+document.getElementById('kpiSearchInput').addEventListener('input', e => {
+  kpiSearchTerm = e.target.value;
+  renderKpiTable();
+});
+
+document.getElementById('addKpiPersonForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = document.getElementById('newKpiName').value.trim();
+  const position = document.getElementById('newKpiPosition').value.trim();
+  const department = document.getElementById('newKpiDept').value.trim();
+  if(!name || !department) return;
+  await createKpiPerson(name, position, department);
+  document.getElementById('newKpiName').value = '';
+  document.getElementById('newKpiPosition').value = '';
+  document.getElementById('newKpiDept').value = '';
+  document.getElementById('kpiAdminNote').innerText = `Added ${name}.`;
+  renderKpiTab();
+});
+
+// ---------- boot ----------
+const STATUS_STATES = [
+  { key: 'not-started', label: 'Not Started' },
+  { key: 'in-progress', label: 'In Progress' },
+  { key: 'completed', label: 'Completed' }
+];
+function statusButtonsHtml(status, dataAttrs, editable){
+  return `<div class="status-btn-group">` + STATUS_STATES.map(s =>
+    `<button class="status-btn ${status === s.key ? 'active ' + s.key : ''}" data-status="${s.key}" ${dataAttrs} ${editable ? '' : 'disabled'}>${s.label}</button>`
+  ).join('') + `</div>`;
+}
+
+(async function boot(){
+  try{
+    await initAuth();
+    if(currentUser){
+      await loadAllData();
+      subscribeToRealtimeUpdates();
+    }
+  }catch(err){
+    // Anything unexpected during startup — surfaced visibly rather than
+    // leaving the page looking like it's just not responding to clicks.
+    console.error('Startup failed:', err);
+    const note = document.getElementById('magicLinkNote') || document.getElementById('passwordNote');
+    if(note) note.innerText = 'Something went wrong loading the app: ' + (err && err.message ? err.message : err);
+  }
+})();
+
+</script>
 </body>
 </html>

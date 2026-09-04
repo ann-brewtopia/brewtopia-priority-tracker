@@ -7,38 +7,50 @@ Supabase (database + auth) instead of Claude's `window.storage` bridge.
 
 ## Login page — what changed and why
 
-Two real problems showed up on the first live deploy, both fixed now:
+Three real problems showed up on the live deployment, in order:
 
 1. **The page had no styling at all.** It was loading `css/styles.css` as a
-   separate file over a `<link>` tag, and that file wasn't loading on the
-   live Vercel deployment — could be a path issue, a Vercel config quirk,
-   who knows exactly. Rather than chase the specific cause, the whole
-   stylesheet is now **inlined directly into `index.html`**, the same way
-   the original Claude-artifact tracker worked (a single self-contained
-   file). There's no longer a `css/` folder — there's nothing external left
-   to fail to load. If you want to edit styles going forward, edit the
-   `<style>` block at the top of `index.html` directly.
-2. **An expired magic-link click just landed on a blank form with no
-   explanation.** Supabase reports that failure in the URL itself
-   (`#error=access_denied&error_code=otp_expired...`), and nothing was
-   reading it. The login screen now checks for that on load and shows an
-   actual message ("that link expired — request a new one") instead of
-   silence.
+   separate file, and that file wasn't loading on Vercel.
+2. **An expired magic-link click landed on a blank form with no
+   explanation.** Fixed by reading the error Supabase puts in the URL and
+   showing an actual message.
+3. **Every one of the four JS files 404'd on the live deployment**
+   (`supabase-client.js`, `auth.js`, `data.js`, `app.js` all came back
+   "Not Found" in the browser console) — meaning literally none of the
+   app's code was running. Every button on the page was dead: clicking a
+   tab did nothing, submitting the login form did nothing, because there
+   was no JavaScript there to respond to either.
 
-**On top of that, added per your ask:** a proper email + password login is
-now the default tab, with a **Remember me** checkbox that's a real setting,
-not decorative — checked keeps you signed in across browser restarts,
-unchecked signs you out once the tab/browser closes. Magic link is still
-there as a second tab for anyone who prefers it. There's no separate
-"username" field — email is the identifier, same as it always was; adding
-a disconnected username system would just be a second source of truth for
-the same person, worth flagging as a deliberate choice rather than an
-oversight.
+After the *second* separate-file-404 incident, this stopped being treated
+as two unrelated one-off deployment quirks and became a decision: **this
+project is now a single self-contained `index.html` file.** Every script
+that used to live in `js/*.js` is inlined directly inside it (clearly
+labeled with banner comments so it's still readable), the same way the CSS
+was already inlined, the same way the original Claude-artifact version of
+this tool worked the whole time without ever hitting this class of bug.
+**There is no more `js/` folder.** If you're looking at an older clone with
+one, delete it — it's not used anymore.
 
-**One catch worth knowing:** anyone who has only ever used the magic link
-has no password set yet. The "Forgot / set password" link on the password
-tab handles that — it sends the same kind of reset email either way,
-Supabase doesn't distinguish "reset" from "set for the first time."
+The tradeoff: `index.html` is a big file now (a few thousand lines). That's
+a deliberate, informed choice — reliability over tidy file separation for
+a small internal tool, given this exact category of bug has now broken the
+login page twice in a row.
+
+On top of those three fixes, **added per request:** email + password login
+as the default tab (magic link kept as a second tab), a **Remember me**
+checkbox that's a real setting (controls whether the session survives a
+browser restart, not decorative), and a "Forgot / set password" flow —
+necessary because every account so far was created via magic link only,
+which never sets a password, so there was nothing for the password field
+to check against until this exists.
+
+**One bug specifically worth knowing about, since it was subtle:** the
+first version of the password-reset flow showed the "set a new password"
+form correctly, but had no real session behind it — a password-reset link
+carries its session token in the URL, and the code was reading then
+immediately erasing that URL before Supabase's own client got a chance to
+read the token itself. Fixed by switching to Supabase's own
+`PASSWORD_RECOVERY` event instead of manually parsing the URL.
 
 **Ported and working:** sign-in (password + magic link), Home (Team P1s +
 Follow-Ups), Daily Priorities (ticket cards, flagging to P1, due dates,
@@ -90,8 +102,11 @@ where id = (select id from auth.users where email = 'dennis@onlybrewtopia.com');
 ```
 
 ### 3. GitHub
-Push this whole folder to a new repo. Note there's no `css/` folder anymore
-— just `index.html`, `js/`, `supabase_schema.sql`, `vercel.json`, this file.
+Push this whole folder to a new repo. It's just four files now:
+`index.html`, `supabase_schema.sql`, `vercel.json`, `README.md`. No `js/`
+or `css/` folders — if you have an old clone with those, delete it and
+re-clone rather than merging, to avoid stale files confusing a future
+deploy.
 
 ### 4. Vercel
 1. New Project → Import the GitHub repo.
