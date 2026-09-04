@@ -1383,6 +1383,7 @@
 
   <div class="app-body">
     <nav class="sidebar" id="sidebar">
+      <button class="sidebar-toggle" id="sidebarToggle" title="Collapse sidebar">&laquo;</button>
       <div class="sidebar-nav">
         <button class="sidebar-item active" data-tab="home" title="Home">
           <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg></span>
@@ -1399,6 +1400,14 @@
         </button>
         <button class="sidebar-item coming-soon" title="Not wired up to the database yet">
           <span class="sidebar-icon">&#128337;</span><span class="sidebar-label">History (soon)</span>
+        </button>
+        <button class="sidebar-item" data-tab="users" title="Users">
+          <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6"/><circle cx="17.5" cy="9.5" r="2.3"/><path d="M15.3 20c.2-2.6 2-4.6 4.7-4.9"/></svg></span>
+          <span class="sidebar-label">Users</span>
+        </button>
+        <button class="sidebar-item" data-tab="help" title="Help">
+          <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.6 2.6 0 1 1 3.6 2.4c-.9.4-1.4 1.1-1.4 2.1"/><line x1="12" y1="17" x2="12" y2="17.01"/></svg></span>
+          <span class="sidebar-label">Help</span>
         </button>
       </div>
     </nav>
@@ -1423,9 +1432,19 @@
         </div>
 
         <div class="tab-content" id="tab-priorities" style="display:none;">
-          <section class="rail-section">
+          <div class="view-toggle-group" style="margin-bottom:14px;">
+            <button class="week-pill active" id="viewToggleCards">Cards</button>
+            <button class="week-pill" id="viewToggleCompact">Compact</button>
+          </div>
+          <section class="rail-section" id="cardsViewWrap">
             <div class="rail-label">This Week's Order Rail &middot; each person edits their own ticket</div>
             <div class="rail"><div class="rail-scroll" id="ticketRail"></div></div>
+          </section>
+          <section id="compactViewWrap" style="display:none;">
+            <table class="history-table" id="compactTable">
+              <thead><tr><th>Person</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th></tr></thead>
+              <tbody id="compactTableBody"></tbody>
+            </table>
           </section>
         </div>
 
@@ -1453,6 +1472,47 @@
             </div>
           </div>
           <div id="kpiTabBody"></div>
+        </div>
+
+        <div class="tab-content" id="tab-users" style="display:none;">
+          <div class="users-panel">
+            <h3>Users &amp; Access</h3>
+            <p class="users-note">Everyone who has signed in at least once, and their access level. Admins can edit every ticket and the full KPI roster; everyone else can edit only their own ticket, and sees KPIs only once an admin has shared them.</p>
+            <table class="history-table">
+              <thead><tr><th>Name</th><th>Access</th></tr></thead>
+              <tbody id="usersTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-help" style="display:none;">
+          <div class="help-panel">
+            <h3>How to use the Priority Tracker</h3>
+            <div class="help-section">
+              <h4>Signing in</h4>
+              <p>Use the Password tab with your work email, or the Email link tab if you'd rather not use a password. First time signing in with a password? Use "Forgot / set password" — every account starts without one.</p>
+            </div>
+            <div class="help-section">
+              <h4>Daily priorities</h4>
+              <p>Under Daily Priorities, add as many priorities as you need for each day. The flag icon sends one straight to Team P1s on the Home tab; the calendar icon sets a due date. You can only edit your own ticket unless you're an admin.</p>
+            </div>
+            <div class="help-section">
+              <h4>Status &amp; due dates</h4>
+              <p>Every priority, P1, and follow-up has Not Started / In Progress / Completed buttons. Due dates and the flag icon help Dennis and the team see what needs attention without a phone call.</p>
+            </div>
+            <div class="help-section">
+              <h4>Team P1s &amp; Follow-Ups</h4>
+              <p>The Home tab is for anything team-wide — it doesn't need to be tied to a specific day or person. Follow-ups can hold several related items under one owner and due date.</p>
+            </div>
+            <div class="help-section">
+              <h4>KPIs</h4>
+              <p>Admins see everyone's KPIs. Everyone else sees only their own — and only once an admin has explicitly shared it. If you don't see the KPIs tab at all, nothing has been shared with you yet.</p>
+            </div>
+            <div class="help-section">
+              <h4>What's not built yet</h4>
+              <p>History (browsing past weeks) and linking a priority directly to a follow-up are still on the way — everything else here is fully working.</p>
+            </div>
+          </div>
         </div>
 
       </div>
@@ -2203,9 +2263,11 @@ const DAYS = ['Mon','Tue','Wed','Thu','Fri'];
 
 function renderAll(){
   renderTickets();
+  renderCompactView();
   renderP1s();
   renderFollowups();
   renderKpiTab();
+  renderUsersTab();
 }
 
 // ---------- sidebar tab switching ----------
@@ -2217,6 +2279,80 @@ document.querySelectorAll('.sidebar-item[data-tab]').forEach(btn => {
     document.getElementById('tab-' + btn.dataset.tab).style.display = '';
   });
 });
+
+document.getElementById('sidebarToggle').addEventListener('click', () => {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.classList.toggle('collapsed');
+  const toggle = document.getElementById('sidebarToggle');
+  toggle.innerHTML = sidebar.classList.contains('collapsed') ? '&raquo;' : '&laquo;';
+});
+
+// ---------- Cards / Compact view toggle ----------
+document.getElementById('viewToggleCards').addEventListener('click', () => {
+  document.getElementById('viewToggleCards').classList.add('active');
+  document.getElementById('viewToggleCompact').classList.remove('active');
+  document.getElementById('cardsViewWrap').style.display = '';
+  document.getElementById('compactViewWrap').style.display = 'none';
+});
+document.getElementById('viewToggleCompact').addEventListener('click', () => {
+  document.getElementById('viewToggleCompact').classList.add('active');
+  document.getElementById('viewToggleCards').classList.remove('active');
+  document.getElementById('cardsViewWrap').style.display = 'none';
+  document.getElementById('compactViewWrap').style.display = '';
+});
+
+// Read-only plain-table view of everyone's week — scales far better than
+// Cards once the roster gets large, since Cards is one wide card per person.
+function renderCompactView(){
+  const tbody = document.getElementById('compactTableBody');
+  if(!tbody) return;
+  if(members.length === 0){
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-note">No tickets yet.</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = members.map(m => {
+    const cells = DAYS.map(d => {
+      const entries = m.priorities.filter(p => p.day === d);
+      if(entries.length === 0) return `<td><span style="color:var(--muted); font-size:12px;">—</span></td>`;
+      return `<td>${entries.map(e => `
+        <div style="margin-bottom:6px;">
+          <div style="font-size:12.5px;">${escapeHtml(e.text || '(blank)')}</div>
+          <span class="hist-status ${e.status}">${e.status.replace('-', ' ')}</span>
+        </div>
+      `).join('')}</td>`;
+    }).join('');
+    return `<tr><td><div class="history-name">${escapeHtml(m.name || 'Unnamed')}</div><div class="history-role">${escapeHtml(m.title || '')}</div></td>${cells}</tr>`;
+  }).join('');
+}
+
+// ---------- Users & Access ----------
+// Real accounts now (unlike the original artifact's soft ticket-claiming
+// system) — this reads straight from `profiles`, which every signed-in
+// user can see per its RLS policy (see supabase_schema.sql).
+async function renderUsersTab(){
+  const tbody = document.getElementById('usersTableBody');
+  if(!tbody) return;
+  const { data, error } = await supabaseClient
+    .from('profiles')
+    .select('id, full_name, role')
+    .order('role', { ascending: true })
+    .order('full_name', { ascending: true });
+  if(error){
+    console.error(error);
+    tbody.innerHTML = `<tr><td colspan="2"><div class="empty-note">Could not load users.</div></td></tr>`;
+    return;
+  }
+  if(!data || data.length === 0){
+    tbody.innerHTML = `<tr><td colspan="2"><div class="empty-note">No one has signed in yet.</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = data.map(p => `
+    <tr>
+      <td><div class="history-name">${escapeHtml(p.full_name || 'Unnamed')}</div></td>
+      <td><span class="hist-status ${p.role === 'admin' ? 'due-ontrack' : 'not-started'}">${p.role === 'admin' ? 'Admin — full access' : 'Member — own ticket only'}</span></td>
+    </tr>
+  `).join('');
+}
 
 // ---------- Daily Priorities: ticket cards ----------
 function renderTickets(){
