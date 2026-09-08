@@ -33,6 +33,7 @@
 create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   full_name text,
+  email text,   -- mirrored from auth.users, since that table isn't queryable via the client API (needed for the Users tab, owner pickers, etc.)
   role text not null default 'member' check (role in ('admin', 'member')),
   created_at timestamptz not null default now()
 );
@@ -60,8 +61,8 @@ create policy "admins can update anyone's profile, including role"
 create function public.handle_new_user()
 returns trigger as $$
 begin
-  insert into public.profiles (id, full_name)
-  values (new.id, new.raw_user_meta_data ->> 'full_name');
+  insert into public.profiles (id, full_name, email)
+  values (new.id, new.raw_user_meta_data ->> 'full_name', new.email);
   return new;
 end;
 $$ language plpgsql security definer;

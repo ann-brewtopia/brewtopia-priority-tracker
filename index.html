@@ -1398,8 +1398,9 @@
           <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="12" width="4" height="8"/><rect x="10" y="7" width="4" height="13"/><rect x="16" y="3" width="4" height="17"/></svg></span>
           <span class="sidebar-label">KPIs</span>
         </button>
-        <button class="sidebar-item coming-soon" title="Not wired up to the database yet">
-          <span class="sidebar-icon">&#128337;</span><span class="sidebar-label">History (soon)</span>
+        <button class="sidebar-item" data-tab="history" title="History">
+          <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg></span>
+          <span class="sidebar-label">History</span>
         </button>
         <button class="sidebar-item" data-tab="users" title="Users">
           <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6"/><circle cx="17.5" cy="9.5" r="2.3"/><path d="M15.3 20c.2-2.6 2-4.6 4.7-4.9"/></svg></span>
@@ -1472,6 +1473,37 @@
             </div>
           </div>
           <div id="kpiTabBody"></div>
+        </div>
+
+        <div class="tab-content" id="tab-history" style="display:none;">
+          <div class="kpi-controls">
+            <div class="kpi-control">
+              <span class="kpi-control-label">Week</span>
+              <select id="historyWeekSelect"></select>
+            </div>
+          </div>
+          <table class="history-table" id="historyTable">
+            <thead><tr><th>Person</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th></tr></thead>
+            <tbody id="historyTableBody"></tbody>
+          </table>
+
+          <div style="margin-top:36px; padding-top:24px; border-top:2px solid var(--border);">
+            <h3 style="margin:0 0 14px;">View a range of weeks</h3>
+            <div class="kpi-controls">
+              <div class="kpi-control">
+                <span class="kpi-control-label">From</span>
+                <input type="date" id="historyRangeFrom" />
+              </div>
+              <div class="kpi-control">
+                <span class="kpi-control-label">To</span>
+                <input type="date" id="historyRangeTo" />
+              </div>
+              <div class="kpi-control">
+                <button class="identity-change-btn" id="historyViewRangeBtn">View Range</button>
+              </div>
+            </div>
+            <div id="historyRangeResults"></div>
+          </div>
         </div>
 
         <div class="tab-content" id="tab-users" style="display:none;">
@@ -2120,6 +2152,32 @@ async function addFollowupEntry(followupId){
   await loadAllData();
 }
 
+// ---------- Linking a priority to a follow-up ----------
+// The link itself is just followup_entries.linked_priority_id — the
+// followup_entries_with_live_link view (see supabase_schema.sql) means the
+// linked text/owner shown anywhere is always current automatically.
+async function linkPriorityToFollowupEntry(priorityId, followupEntryId){
+  const { error } = await supabaseClient.from('followup_entries').update({ linked_priority_id: priorityId }).eq('id', followupEntryId);
+  if(error) console.error(error);
+  await loadAllData();
+}
+
+async function createFollowupFromPriority(priority, memberName){
+  const { data, error } = await supabaseClient.from('followups').insert({ owner_name: memberName }).select().single();
+  if(error){ console.error(error); return; }
+  const { error: entryErr } = await supabaseClient
+    .from('followup_entries')
+    .insert({ followup_id: data.id, text: priority.text, linked_priority_id: priority.id });
+  if(entryErr) console.error(entryErr);
+  await loadAllData();
+}
+
+async function unlinkPriorityFromFollowup(priorityId){
+  const { error } = await supabaseClient.from('followup_entries').update({ linked_priority_id: null }).eq('linked_priority_id', priorityId);
+  if(error) console.error(error);
+  await loadAllData();
+}
+
 async function updateFollowup(id, fields){
   const { error } = await supabaseClient.from('followups').update(fields).eq('id', id);
   if(error) console.error(error);
@@ -2277,6 +2335,7 @@ document.querySelectorAll('.sidebar-item[data-tab]').forEach(btn => {
     btn.classList.add('active');
     document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
     document.getElementById('tab-' + btn.dataset.tab).style.display = '';
+    if(btn.dataset.tab === 'history') renderHistoryTab();
   });
 });
 
@@ -2329,14 +2388,137 @@ function renderCompactView(){
 // Real accounts now (unlike the original artifact's soft ticket-claiming
 // system) — this reads straight from `profiles`, which every signed-in
 // user can see per its RLS policy (see supabase_schema.sql).
+// ---------- History ----------
+// Read-only, single-week browser. Unlike the original artifact, there's no
+// separate "archive" to query — priorities already carry their own
+// week_start, so browsing history is just asking for a different week.
+async function renderHistoryTab(){
+  const select = document.getElementById('historyWeekSelect');
+  if(!select) return;
+
+  const { data: weekRows, error: weekErr } = await supabaseClient
+    .from('priorities')
+    .select('week_start');
+  if(weekErr){ console.error(weekErr); return; }
+
+  const weeks = [...new Set((weekRows || []).map(w => w.week_start))].sort().reverse();
+  if(weeks.length === 0){
+    select.innerHTML = '';
+    document.getElementById('historyTableBody').innerHTML = `<tr><td colspan="6"><div class="empty-note">No history yet.</div></td></tr>`;
+    return;
+  }
+
+  const previousSelection = select.value;
+  select.innerHTML = weeks.map(w =>
+    `<option value="${w}" ${w === previousSelection ? 'selected' : ''}>Week of ${w}${w === currentWeekStart ? ' (current)' : ''}</option>`
+  ).join('');
+  select.onchange = () => renderHistoryTable(select.value);
+
+  // Default the range pickers to something sensible: earliest known week
+  // through the most recent, so "View Range" works with no typing on the
+  // very first visit to the tab.
+  const fromInput = document.getElementById('historyRangeFrom');
+  const toInput = document.getElementById('historyRangeTo');
+  if(fromInput && !fromInput.value) fromInput.value = weeks[weeks.length - 1];
+  if(toInput && !toInput.value) toInput.value = weeks[0];
+
+  await renderHistoryTable(weeks.includes(previousSelection) ? previousSelection : weeks[0]);
+}
+
+// Builds the Person × Mon–Fri table rows for one week's worth of priority
+// rows — shared by both the single-week view and the multi-week range view
+// below, so the two never drift apart in how they display a week.
+function historyRowsHtml(people, priorityRows){
+  if(people.length === 0){
+    return `<tr><td colspan="6"><div class="empty-note">No entries for this week.</div></td></tr>`;
+  }
+  return people.map(m => {
+    const cells = DAYS.map(d => {
+      const entries = priorityRows.filter(p => p.member_id === m.id && p.day === d);
+      if(entries.length === 0) return `<td><span style="color:var(--muted); font-size:12px;">—</span></td>`;
+      return `<td>${entries.map(e => `
+        <div style="margin-bottom:6px;">
+          <div style="font-size:12.5px;">${escapeHtml(e.text || '(blank)')}</div>
+          <span class="hist-status ${e.status}">${e.status.replace('-', ' ')}</span>
+        </div>
+      `).join('')}</td>`;
+    }).join('');
+    return `<tr><td><div class="history-name">${escapeHtml(m.name || 'Unnamed')}</div><div class="history-role">${escapeHtml(m.title || '')}</div></td>${cells}</tr>`;
+  }).join('');
+}
+
+async function renderHistoryTable(weekStart){
+  const tbody = document.getElementById('historyTableBody');
+  if(!tbody || !weekStart) return;
+
+  const { data: memberRows, error: memberErr } = await supabaseClient
+    .from('members').select('id, name, title').order('created_at', { ascending: true });
+  if(memberErr){ console.error(memberErr); return; }
+
+  const { data: priorityRows, error: priorityErr } = await supabaseClient
+    .from('priorities').select('*').eq('week_start', weekStart);
+  if(priorityErr){ console.error(priorityErr); return; }
+
+  const peopleWithEntries = (memberRows || []).filter(m => priorityRows.some(p => p.member_id === m.id));
+  tbody.innerHTML = historyRowsHtml(peopleWithEntries, priorityRows || []);
+}
+
+// Multi-week range view — every week between From and To, each stacked as
+// its own labeled table. A person filter isn't included in this first pass
+// (the single-week view's table already shows everyone); worth adding if
+// scanning a specific person across many weeks turns out to be needed.
+async function renderHistoryRange(){
+  const from = document.getElementById('historyRangeFrom').value;
+  const to = document.getElementById('historyRangeTo').value;
+  const container = document.getElementById('historyRangeResults');
+  if(!container) return;
+  if(!from || !to){ container.innerHTML = `<div class="empty-note">Pick both a From and To date.</div>`; return; }
+  if(from > to){ container.innerHTML = `<div class="empty-note">"From" needs to be before "To".</div>`; return; }
+
+  container.innerHTML = `<div class="empty-note">Loading…</div>`;
+
+  const { data: weekRows, error: weekErr } = await supabaseClient
+    .from('priorities').select('week_start').gte('week_start', from).lte('week_start', to);
+  if(weekErr){ console.error(weekErr); container.innerHTML = `<div class="empty-note">Could not load that range.</div>`; return; }
+
+  const weeks = [...new Set((weekRows || []).map(w => w.week_start))].sort().reverse();
+  if(weeks.length === 0){
+    container.innerHTML = `<div class="empty-note">No history in that range.</div>`;
+    return;
+  }
+
+  const { data: memberRows, error: memberErr } = await supabaseClient
+    .from('members').select('id, name, title').order('created_at', { ascending: true });
+  if(memberErr){ console.error(memberErr); container.innerHTML = `<div class="empty-note">Could not load.</div>`; return; }
+
+  const sections = [];
+  for(const week of weeks){
+    const { data: priorityRows, error: priorityErr } = await supabaseClient
+      .from('priorities').select('*').eq('week_start', week);
+    if(priorityErr){ console.error(priorityErr); continue; }
+    const peopleWithEntries = (memberRows || []).filter(m => (priorityRows || []).some(p => p.member_id === m.id));
+    sections.push(`
+      <div style="margin-bottom:28px;">
+        <div class="history-divider-label">Week of ${week}${week === currentWeekStart ? ' (current)' : ''}</div>
+        <table class="history-table">
+          <thead><tr><th>Person</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th></tr></thead>
+          <tbody>${historyRowsHtml(peopleWithEntries, priorityRows || [])}</tbody>
+        </table>
+      </div>
+    `);
+  }
+
+  container.innerHTML = sections.join('') || `<div class="empty-note">No entries in that range.</div>`;
+}
+
 async function renderUsersTab(){
   const tbody = document.getElementById('usersTableBody');
   if(!tbody) return;
   const { data, error } = await supabaseClient
     .from('profiles')
-    .select('id, full_name, role')
+    .select('id, full_name, email, role')
     .order('role', { ascending: true })
-    .order('full_name', { ascending: true });
+    .order('email', { ascending: true });
   if(error){
     console.error(error);
     tbody.innerHTML = `<tr><td colspan="2"><div class="empty-note">Could not load users.</div></td></tr>`;
@@ -2348,13 +2530,42 @@ async function renderUsersTab(){
   }
   tbody.innerHTML = data.map(p => `
     <tr>
-      <td><div class="history-name">${escapeHtml(p.full_name || 'Unnamed')}</div></td>
+      <td><div class="history-name">${escapeHtml(p.full_name || p.email || 'Unknown')}</div>${p.full_name ? `<div class="history-role">${escapeHtml(p.email || '')}</div>` : ''}</td>
       <td><span class="hist-status ${p.role === 'admin' ? 'due-ontrack' : 'not-started'}">${p.role === 'admin' ? 'Admin — full access' : 'Member — own ticket only'}</span></td>
     </tr>
   `).join('');
 }
 
 // ---------- Daily Priorities: ticket cards ----------
+// Populates the inline picker that appears when the link button is clicked —
+// a real dropdown of open (not-yet-linked) follow-up items, plus an option
+// to spin up a brand new follow-up pre-filled from this priority.
+function renderLinkPicker(picker, entry, memberName){
+  const openEntries = [];
+  followups.forEach(f => f.entries.forEach(e => {
+    if(!e.linked_priority_id) openEntries.push({ id: e.id, label: `${(e.text || '(blank)').slice(0, 60)} — ${f.owner_name || 'no owner'}` });
+  }));
+
+  picker.innerHTML = `
+    <select>
+      <option value="">Choose a follow-up item…</option>
+      <option value="__new__">+ Create a new follow-up from this</option>
+      ${openEntries.map(o => `<option value="${o.id}">${escapeHtml(o.label)}</option>`).join('')}
+    </select>
+  `;
+
+  picker.querySelector('select').addEventListener('change', async (e) => {
+    const value = e.target.value;
+    if(!value) return;
+    picker.style.display = 'none';
+    if(value === '__new__'){
+      await createFollowupFromPriority(entry, memberName);
+    }else{
+      await linkPriorityToFollowupEntry(entry.id, value);
+    }
+  });
+}
+
 function renderTickets(){
   const rail = document.getElementById('ticketRail');
   rail.innerHTML = '';
@@ -2370,19 +2581,25 @@ function renderTickets(){
 
     const dayBlocks = DAYS.map(d => {
       const entries = m.priorities.filter(p => p.day === d);
-      const entryRows = entries.map(entry => `
+      const entryRows = entries.map(entry => {
+        const linkedEntry = followups.flatMap(f => f.entries.map(e => ({...e, ownerName: f.owner_name}))).find(e => e.linked_priority_id === entry.id);
+        return `
         <div class="day-entry" data-entry-id="${entry.id}">
           <div class="day-entry-main">
             <textarea class="day-input" rows="1" data-entry-id="${entry.id}" ${editable ? '' : 'disabled'}>${escapeHtml(entry.text || '')}</textarea>
             <button class="flag-day-btn ${entry.flagged ? 'flagged' : ''}" data-entry-id="${entry.id}" title="Send to Team P1s" ${editable ? '' : 'disabled'}>&#9873;</button>
+            <button class="link-day-btn ${linkedEntry ? 'linked' : ''}" data-entry-id="${entry.id}" title="${linkedEntry ? 'Unlink from follow-up' : 'Link to a follow-up'}" ${editable ? '' : 'disabled'}>&#128279;</button>
             <button class="due-day-btn ${entry.due ? 'has-due' : ''}" data-entry-id="${entry.id}" title="Set a due date" ${editable ? '' : 'disabled'}>&#128197;</button>
             <button class="remove-entry-mini" data-entry-id="${entry.id}" title="Remove this priority" ${editable ? '' : 'disabled'}>&times;</button>
           </div>
           ${statusButtonsHtml(entry.status, `data-entry-id="${entry.id}"`, editable)}
           ${entry.due ? `<div class="day-due-chip">&#128197; Due ${entry.due}</div>` : ''}
           ${entry.carried_weeks ? `<div class="carried-badge">&#8635; Week ${entry.carried_weeks + 1}</div>` : ''}
+          ${linkedEntry ? `<div class="link-tag">&#128279; Linked to follow-up (${escapeHtml(linkedEntry.ownerName || 'unowned')})<button class="unlink-x" data-entry-id="${entry.id}" title="Unlink">&times;</button></div>` : ''}
+          <div class="link-picker-row" data-entry-id="${entry.id}" style="display:none;"></div>
         </div>
-      `).join('');
+      `;
+      }).join('');
       const emptyNote = entries.length === 0 ? `<div class="day-empty-note">No priorities yet</div>` : '';
       const sched = (m.day_schedule && m.day_schedule[d]) || 'office';
       const schedLabels = { office: 'Office', remote: 'Remote', off: 'Off' };
@@ -2431,6 +2648,26 @@ function renderTickets(){
           const entry = m.priorities.find(p => p.id === btn.dataset.entryId);
           if(!entry || !(entry.text || '').trim()){ alert('Add text to this priority before flagging it.'); return; }
           await togglePriorityFlag(entry, m.name);
+        });
+      });
+      ticket.querySelectorAll('.link-day-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const entry = m.priorities.find(p => p.id === btn.dataset.entryId);
+          if(!entry) return;
+          if(btn.classList.contains('linked')) return; // unlinking happens via the × on the chip, not this button
+          if(!(entry.text || '').trim()){ alert('Add text to this priority before linking it.'); return; }
+          const picker = ticket.querySelector(`.link-picker-row[data-entry-id="${entry.id}"]`);
+          if(!picker) return;
+          const isOpen = picker.style.display !== 'none';
+          ticket.querySelectorAll('.link-picker-row').forEach(p => p.style.display = 'none');
+          if(isOpen) return; // was already open, just close it
+          picker.style.display = '';
+          renderLinkPicker(picker, entry, m.name);
+        });
+      });
+      ticket.querySelectorAll('.unlink-x').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if(confirm('Unlink this priority from its follow-up?')) await unlinkPriorityFromFollowup(btn.dataset.entryId);
         });
       });
       ticket.querySelectorAll('.due-day-btn').forEach(btn => {
@@ -2730,6 +2967,8 @@ document.getElementById('kpiSearchInput').addEventListener('input', e => {
   kpiSearchTerm = e.target.value;
   renderKpiTable();
 });
+
+document.getElementById('historyViewRangeBtn').addEventListener('click', renderHistoryRange);
 
 document.getElementById('addKpiPersonForm').addEventListener('submit', async e => {
   e.preventDefault();
