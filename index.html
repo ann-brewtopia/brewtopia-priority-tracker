@@ -1418,7 +1418,7 @@
 
         <div class="tab-content" id="tab-home">
           <section class="panel panel-full">
-            <h2><span class="flag">&#9873;</span> Team P1s</h2>
+            <h2><span class="flag"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v18"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg></span> Team P1s</h2>
             <table class="history-table p1-table">
               <thead><tr><th>Description</th><th>Owner</th><th>Due</th><th>Status</th><th></th></tr></thead>
               <tbody id="p1TableBody"></tbody>
@@ -1426,7 +1426,7 @@
             <button class="add-line" id="addP1">+ Add a P1</button>
           </section>
           <section class="panel panel-full" style="margin-top:24px;">
-            <h2><span class="star">&#9733;</span> Follow-Ups</h2>
+            <h2><span class="star"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.1 1.4-6.3-4.8-4.3 6.4-.6z"/></svg></span> Follow-Ups</h2>
             <div id="followupList"></div>
             <button class="add-line" id="addFollowup">+ Add follow-up</button>
           </section>
@@ -2038,7 +2038,6 @@ async function createMember(name){
     .insert({ name, title: '', owner_user_id: currentUser.id })
     .select().single();
   if(error){ console.error(error); return null; }
-  await loadAllData();
   return data;
 }
 
@@ -2049,7 +2048,6 @@ async function claimTicket(memberId){
     .eq('id', memberId)
     .is('owner_user_id', null); // RLS also enforces this — belt and suspenders
   if(error) console.error(error);
-  await loadAllData();
 }
 
 async function updateMember(memberId, fields){
@@ -2060,7 +2058,6 @@ async function updateMember(memberId, fields){
 async function deleteMember(memberId){
   const { error } = await supabaseClient.from('members').delete().eq('id', memberId);
   if(error){ console.error(error); return; }
-  await loadAllData();
 }
 
 function canEditTicket(member){
@@ -2075,7 +2072,6 @@ async function addPriority(memberId, day){
     member_id: memberId, week_start: currentWeekStart, day, text: ''
   });
   if(error) console.error(error);
-  await loadAllData();
 }
 
 async function updatePriority(priorityId, fields){
@@ -2086,7 +2082,6 @@ async function updatePriority(priorityId, fields){
 async function deletePriority(priorityId){
   const { error } = await supabaseClient.from('priorities').delete().eq('id', priorityId);
   if(error) console.error(error);
-  await loadAllData();
 }
 
 // Flag toggle — matches the v7 fix: clicking an already-flagged priority
@@ -2105,7 +2100,6 @@ async function togglePriorityFlag(priority, memberName){
     });
     await supabaseClient.from('priorities').update({ flagged: true }).eq('id', priority.id);
   }
-  await loadAllData();
 }
 
 // ----------------------------------------------------------------------------
@@ -2114,7 +2108,6 @@ async function togglePriorityFlag(priority, memberName){
 async function addP1(){
   const { error } = await supabaseClient.from('p1s').insert({ text: '', owner_name: '' });
   if(error) console.error(error);
-  await loadAllData();
 }
 
 async function updateP1(id, fields){
@@ -2133,7 +2126,6 @@ async function deleteP1(id){
   if(p1 && p1.source_priority_id){
     await supabaseClient.from('priorities').update({ flagged: false }).eq('id', p1.source_priority_id);
   }
-  await loadAllData();
 }
 
 // ----------------------------------------------------------------------------
@@ -2143,13 +2135,11 @@ async function addFollowup(){
   const { data, error } = await supabaseClient.from('followups').insert({ owner_name: '' }).select().single();
   if(error){ console.error(error); return; }
   await supabaseClient.from('followup_entries').insert({ followup_id: data.id, text: '' });
-  await loadAllData();
 }
 
 async function addFollowupEntry(followupId){
   const { error } = await supabaseClient.from('followup_entries').insert({ followup_id: followupId, text: '' });
   if(error) console.error(error);
-  await loadAllData();
 }
 
 // ---------- Linking a priority to a follow-up ----------
@@ -2159,7 +2149,6 @@ async function addFollowupEntry(followupId){
 async function linkPriorityToFollowupEntry(priorityId, followupEntryId){
   const { error } = await supabaseClient.from('followup_entries').update({ linked_priority_id: priorityId }).eq('id', followupEntryId);
   if(error) console.error(error);
-  await loadAllData();
 }
 
 async function createFollowupFromPriority(priority, memberName){
@@ -2169,13 +2158,11 @@ async function createFollowupFromPriority(priority, memberName){
     .from('followup_entries')
     .insert({ followup_id: data.id, text: priority.text, linked_priority_id: priority.id });
   if(entryErr) console.error(entryErr);
-  await loadAllData();
 }
 
 async function unlinkPriorityFromFollowup(priorityId){
   const { error } = await supabaseClient.from('followup_entries').update({ linked_priority_id: null }).eq('linked_priority_id', priorityId);
   if(error) console.error(error);
-  await loadAllData();
 }
 
 async function updateFollowup(id, fields){
@@ -2191,7 +2178,6 @@ async function updateFollowupEntry(id, fields){
 async function deleteFollowup(id){
   const { error } = await supabaseClient.from('followups').delete().eq('id', id);
   if(error) console.error(error);
-  await loadAllData();
 }
 
 async function deleteFollowupEntry(id, followupId){
@@ -2200,7 +2186,6 @@ async function deleteFollowupEntry(id, followupId){
   if(remaining.data && remaining.data.length === 0){
     await supabaseClient.from('followups').delete().eq('id', followupId); // don't leave an empty card behind
   }
-  await loadAllData();
 }
 
 // ----------------------------------------------------------------------------
@@ -2587,15 +2572,16 @@ function renderTickets(){
         <div class="day-entry" data-entry-id="${entry.id}">
           <div class="day-entry-main">
             <textarea class="day-input" rows="1" data-entry-id="${entry.id}" ${editable ? '' : 'disabled'}>${escapeHtml(entry.text || '')}</textarea>
-            <button class="flag-day-btn ${entry.flagged ? 'flagged' : ''}" data-entry-id="${entry.id}" title="Send to Team P1s" ${editable ? '' : 'disabled'}>&#9873;</button>
-            <button class="link-day-btn ${linkedEntry ? 'linked' : ''}" data-entry-id="${entry.id}" title="${linkedEntry ? 'Unlink from follow-up' : 'Link to a follow-up'}" ${editable ? '' : 'disabled'}>&#128279;</button>
-            <button class="due-day-btn ${entry.due ? 'has-due' : ''}" data-entry-id="${entry.id}" title="Set a due date" ${editable ? '' : 'disabled'}>&#128197;</button>
+            <button class="flag-day-btn ${entry.flagged ? 'flagged' : ''}" data-entry-id="${entry.id}" title="Send to Team P1s" ${editable ? '' : 'disabled'}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v18"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg></button>
+            <button class="link-day-btn ${linkedEntry ? 'linked' : ''}" data-entry-id="${entry.id}" title="${linkedEntry ? 'Unlink from follow-up' : 'Link to a follow-up'}" ${editable ? '' : 'disabled'}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6"/><path d="M8 12l-2.5 2.5a3 3 0 0 0 4 4L12 16"/><path d="M16 12l2.5-2.5a3 3 0 0 0-4-4L12 8"/></svg></button>
+            <button class="due-day-btn ${entry.due ? 'has-due' : ''}" data-entry-id="${entry.id}" title="Set a due date" ${editable ? '' : 'disabled'}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg></button>
+            <input type="date" class="due-date-picker-input" data-entry-id="${entry.id}" value="${entry.due || ''}" style="position:absolute; opacity:0; pointer-events:none; width:1px; height:1px;" ${editable ? '' : 'disabled'} />
             <button class="remove-entry-mini" data-entry-id="${entry.id}" title="Remove this priority" ${editable ? '' : 'disabled'}>&times;</button>
           </div>
           ${statusButtonsHtml(entry.status, `data-entry-id="${entry.id}"`, editable)}
-          ${entry.due ? `<div class="day-due-chip">&#128197; Due ${entry.due}</div>` : ''}
-          ${entry.carried_weeks ? `<div class="carried-badge">&#8635; Week ${entry.carried_weeks + 1}</div>` : ''}
-          ${linkedEntry ? `<div class="link-tag">&#128279; Linked to follow-up (${escapeHtml(linkedEntry.ownerName || 'unowned')})<button class="unlink-x" data-entry-id="${entry.id}" title="Unlink">&times;</button></div>` : ''}
+          ${entry.due ? `<div class="day-due-chip"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><rect x="4" y="5" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>Due ${entry.due}</div>` : ''}
+          ${entry.carried_weeks ? `<div class="carried-badge"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><path d="M4 4v5h5"/><path d="M4.6 9a8 8 0 1 0 1.9-5"/></svg>Week ${entry.carried_weeks + 1}</div>` : ''}
+          ${linkedEntry ? `<div class="link-tag"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><path d="M9 15l6-6"/><path d="M8 12l-2.5 2.5a3 3 0 0 0 4 4L12 16"/><path d="M16 12l2.5-2.5a3 3 0 0 0-4-4L12 8"/></svg>Linked to follow-up (${escapeHtml(linkedEntry.ownerName || 'unowned')})<button class="unlink-x" data-entry-id="${entry.id}" title="Unlink">&times;</button></div>` : ''}
           <div class="link-picker-row" data-entry-id="${entry.id}" style="display:none;"></div>
         </div>
       `;
@@ -2615,7 +2601,7 @@ function renderTickets(){
       `;
     }).join('');
 
-    const lockNote = editable ? '' : `<div class="ticket-lock-note">&#128274; Only ${escapeHtml(m.name || 'this person')} (or admin) can edit this</div>`;
+    const lockNote = editable ? '' : `<div class="ticket-lock-note"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Only ${escapeHtml(m.name || 'this person')} (or admin) can edit this</div>`;
 
     ticket.innerHTML = `
       ${lockNote}
@@ -2640,7 +2626,6 @@ function renderTickets(){
       ticket.querySelectorAll('.status-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
           await updatePriority(btn.dataset.entryId, { status: btn.dataset.status });
-          await loadAllData();
         });
       });
       ticket.querySelectorAll('.flag-day-btn').forEach(btn => {
@@ -2671,11 +2656,15 @@ function renderTickets(){
         });
       });
       ticket.querySelectorAll('.due-day-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const date = prompt('Due date (YYYY-MM-DD), blank to clear:');
-          if(date === null) return;
-          await updatePriority(btn.dataset.entryId, { due: date || null });
-          await loadAllData();
+        btn.addEventListener('click', () => {
+          const input = ticket.querySelector(`.due-date-picker-input[data-entry-id="${btn.dataset.entryId}"]`);
+          if(input && input.showPicker) input.showPicker();
+          else if(input) input.focus(); // fallback for browsers without showPicker()
+        });
+      });
+      ticket.querySelectorAll('.due-date-picker-input').forEach(input => {
+        input.addEventListener('change', async (e) => {
+          await updatePriority(e.target.dataset.entryId, { due: e.target.value || null });
         });
       });
       ticket.querySelectorAll('.remove-entry-mini').forEach(btn => {
@@ -2692,7 +2681,6 @@ function renderTickets(){
           const next = cycle[(cycle.indexOf(current) + 1) % cycle.length];
           const updatedSchedule = { ...(m.day_schedule || {}), [day]: next };
           await updateMember(m.id, { day_schedule: updatedSchedule });
-          await loadAllData();
         });
       });
       const removeBtn = ticket.querySelector('.remove-x');
@@ -2740,7 +2728,7 @@ function renderP1s(){
     row.querySelector('.line-owner').addEventListener('change', e => updateP1(item.id, { owner_name: e.target.value }));
     row.querySelector('.line-due').addEventListener('change', e => updateP1(item.id, { due: e.target.value || null }));
     row.querySelectorAll('.status-btn').forEach(btn => {
-      btn.addEventListener('click', async () => { await updateP1(item.id, { status: btn.dataset.status }); await loadAllData(); });
+      btn.addEventListener('click', async () => { await updateP1(item.id, { status: btn.dataset.status }); });
     });
     row.querySelector('.remove-x').addEventListener('click', () => deleteP1(item.id));
     tbody.appendChild(row);
@@ -2770,7 +2758,7 @@ function renderFollowups(){
           <button class="remove-entry-mini" data-entry-id="${e.id}" title="Remove this item">&times;</button>
         </div>
         ${statusButtonsHtml(e.status, `data-entry-id="${e.id}"`, true)}
-        ${e.linked_priority_text ? `<div class="link-tag">&#128279; ${escapeHtml(e.linked_member_name || '')} &middot; ${escapeHtml(e.linked_day || '')}: ${escapeHtml(e.linked_priority_text)}</div>` : ''}
+        ${e.linked_priority_text ? `<div class="link-tag"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><path d="M9 15l6-6"/><path d="M8 12l-2.5 2.5a3 3 0 0 0 4 4L12 16"/><path d="M16 12l2.5-2.5a3 3 0 0 0-4-4L12 8"/></svg>${escapeHtml(e.linked_member_name || '')} &middot; ${escapeHtml(e.linked_day || '')}: ${escapeHtml(e.linked_priority_text)}</div>` : ''}
       </div>
     `).join('');
 
@@ -2790,7 +2778,7 @@ function renderFollowups(){
       inp.addEventListener('change', e => updateFollowupEntry(e.target.dataset.entryId, { text: e.target.value }));
     });
     card.querySelectorAll('.status-btn').forEach(btn => {
-      btn.addEventListener('click', async () => { await updateFollowupEntry(btn.dataset.entryId, { status: btn.dataset.status }); await loadAllData(); });
+      btn.addEventListener('click', async () => { await updateFollowupEntry(btn.dataset.entryId, { status: btn.dataset.status }); });
     });
     card.querySelectorAll('.remove-entry-mini').forEach(btn => {
       btn.addEventListener('click', () => deleteFollowupEntry(btn.dataset.entryId, f.id));
