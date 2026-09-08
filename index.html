@@ -2038,6 +2038,7 @@ async function createMember(name){
     .insert({ name, title: '', owner_user_id: currentUser.id })
     .select().single();
   if(error){ console.error(error); return null; }
+  await loadAllData();
   return data;
 }
 
@@ -2048,6 +2049,7 @@ async function claimTicket(memberId){
     .eq('id', memberId)
     .is('owner_user_id', null); // RLS also enforces this — belt and suspenders
   if(error) console.error(error);
+  await loadAllData();
 }
 
 async function updateMember(memberId, fields){
@@ -2058,6 +2060,7 @@ async function updateMember(memberId, fields){
 async function deleteMember(memberId){
   const { error } = await supabaseClient.from('members').delete().eq('id', memberId);
   if(error){ console.error(error); return; }
+  await loadAllData();
 }
 
 function canEditTicket(member){
@@ -2072,6 +2075,7 @@ async function addPriority(memberId, day){
     member_id: memberId, week_start: currentWeekStart, day, text: ''
   });
   if(error) console.error(error);
+  await loadAllData();
 }
 
 async function updatePriority(priorityId, fields){
@@ -2082,6 +2086,7 @@ async function updatePriority(priorityId, fields){
 async function deletePriority(priorityId){
   const { error } = await supabaseClient.from('priorities').delete().eq('id', priorityId);
   if(error) console.error(error);
+  await loadAllData();
 }
 
 // Flag toggle — matches the v7 fix: clicking an already-flagged priority
@@ -2100,6 +2105,7 @@ async function togglePriorityFlag(priority, memberName){
     });
     await supabaseClient.from('priorities').update({ flagged: true }).eq('id', priority.id);
   }
+  await loadAllData();
 }
 
 // ----------------------------------------------------------------------------
@@ -2108,6 +2114,7 @@ async function togglePriorityFlag(priority, memberName){
 async function addP1(){
   const { error } = await supabaseClient.from('p1s').insert({ text: '', owner_name: '' });
   if(error) console.error(error);
+  await loadAllData();
 }
 
 async function updateP1(id, fields){
@@ -2126,6 +2133,7 @@ async function deleteP1(id){
   if(p1 && p1.source_priority_id){
     await supabaseClient.from('priorities').update({ flagged: false }).eq('id', p1.source_priority_id);
   }
+  await loadAllData();
 }
 
 // ----------------------------------------------------------------------------
@@ -2135,11 +2143,13 @@ async function addFollowup(){
   const { data, error } = await supabaseClient.from('followups').insert({ owner_name: '' }).select().single();
   if(error){ console.error(error); return; }
   await supabaseClient.from('followup_entries').insert({ followup_id: data.id, text: '' });
+  await loadAllData();
 }
 
 async function addFollowupEntry(followupId){
   const { error } = await supabaseClient.from('followup_entries').insert({ followup_id: followupId, text: '' });
   if(error) console.error(error);
+  await loadAllData();
 }
 
 // ---------- Linking a priority to a follow-up ----------
@@ -2149,6 +2159,7 @@ async function addFollowupEntry(followupId){
 async function linkPriorityToFollowupEntry(priorityId, followupEntryId){
   const { error } = await supabaseClient.from('followup_entries').update({ linked_priority_id: priorityId }).eq('id', followupEntryId);
   if(error) console.error(error);
+  await loadAllData();
 }
 
 async function createFollowupFromPriority(priority, memberName){
@@ -2158,11 +2169,13 @@ async function createFollowupFromPriority(priority, memberName){
     .from('followup_entries')
     .insert({ followup_id: data.id, text: priority.text, linked_priority_id: priority.id });
   if(entryErr) console.error(entryErr);
+  await loadAllData();
 }
 
 async function unlinkPriorityFromFollowup(priorityId){
   const { error } = await supabaseClient.from('followup_entries').update({ linked_priority_id: null }).eq('linked_priority_id', priorityId);
   if(error) console.error(error);
+  await loadAllData();
 }
 
 async function updateFollowup(id, fields){
@@ -2178,6 +2191,7 @@ async function updateFollowupEntry(id, fields){
 async function deleteFollowup(id){
   const { error } = await supabaseClient.from('followups').delete().eq('id', id);
   if(error) console.error(error);
+  await loadAllData();
 }
 
 async function deleteFollowupEntry(id, followupId){
@@ -2186,6 +2200,7 @@ async function deleteFollowupEntry(id, followupId){
   if(remaining.data && remaining.data.length === 0){
     await supabaseClient.from('followups').delete().eq('id', followupId); // don't leave an empty card behind
   }
+  await loadAllData();
 }
 
 // ----------------------------------------------------------------------------
@@ -2626,6 +2641,7 @@ function renderTickets(){
       ticket.querySelectorAll('.status-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
           await updatePriority(btn.dataset.entryId, { status: btn.dataset.status });
+          await loadAllData();
         });
       });
       ticket.querySelectorAll('.flag-day-btn').forEach(btn => {
@@ -2681,6 +2697,7 @@ function renderTickets(){
           const next = cycle[(cycle.indexOf(current) + 1) % cycle.length];
           const updatedSchedule = { ...(m.day_schedule || {}), [day]: next };
           await updateMember(m.id, { day_schedule: updatedSchedule });
+          await loadAllData();
         });
       });
       const removeBtn = ticket.querySelector('.remove-x');
@@ -2728,7 +2745,7 @@ function renderP1s(){
     row.querySelector('.line-owner').addEventListener('change', e => updateP1(item.id, { owner_name: e.target.value }));
     row.querySelector('.line-due').addEventListener('change', e => updateP1(item.id, { due: e.target.value || null }));
     row.querySelectorAll('.status-btn').forEach(btn => {
-      btn.addEventListener('click', async () => { await updateP1(item.id, { status: btn.dataset.status }); });
+      btn.addEventListener('click', async () => { await updateP1(item.id, { status: btn.dataset.status }); await loadAllData(); });
     });
     row.querySelector('.remove-x').addEventListener('click', () => deleteP1(item.id));
     tbody.appendChild(row);
@@ -2778,7 +2795,7 @@ function renderFollowups(){
       inp.addEventListener('change', e => updateFollowupEntry(e.target.dataset.entryId, { text: e.target.value }));
     });
     card.querySelectorAll('.status-btn').forEach(btn => {
-      btn.addEventListener('click', async () => { await updateFollowupEntry(btn.dataset.entryId, { status: btn.dataset.status }); });
+      btn.addEventListener('click', async () => { await updateFollowupEntry(btn.dataset.entryId, { status: btn.dataset.status }); await loadAllData(); });
     });
     card.querySelectorAll('.remove-entry-mini').forEach(btn => {
       btn.addEventListener('click', () => deleteFollowupEntry(btn.dataset.entryId, f.id));
