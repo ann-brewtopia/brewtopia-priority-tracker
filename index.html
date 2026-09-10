@@ -1419,6 +1419,14 @@
         <div class="tab-content" id="tab-home">
           <section class="panel panel-full">
             <h2><span class="flag"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v18"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg></span> Team P1s</h2>
+            <div class="kpi-controls" style="margin-bottom:12px;">
+              <div class="kpi-control">
+                <input id="p1Search" placeholder="Search P1s…" style="border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:12px;" />
+              </div>
+              <div class="kpi-control">
+                <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer;"><input type="checkbox" id="p1ShowCompleted" style="width:14px; height:14px;" /> Show completed</label>
+              </div>
+            </div>
             <table class="history-table p1-table">
               <thead><tr><th>Description</th><th>Owner</th><th>Due</th><th>Status</th><th></th></tr></thead>
               <tbody id="p1TableBody"></tbody>
@@ -1427,12 +1435,26 @@
           </section>
           <section class="panel panel-full" style="margin-top:24px;">
             <h2><span class="star"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.1 1.4-6.3-4.8-4.3 6.4-.6z"/></svg></span> Follow-Ups</h2>
+            <div class="kpi-controls" style="margin-bottom:12px;">
+              <div class="kpi-control">
+                <input id="followupSearch" placeholder="Search follow-ups…" style="border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:12px;" />
+              </div>
+              <div class="kpi-control">
+                <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; cursor:pointer;"><input type="checkbox" id="followupShowCompleted" style="width:14px; height:14px;" /> Show fully-completed follow-ups</label>
+              </div>
+            </div>
             <div id="followupList"></div>
             <button class="add-line" id="addFollowup">+ Add follow-up</button>
           </section>
         </div>
 
         <div class="tab-content" id="tab-priorities" style="display:none;">
+          <div class="kpi-controls">
+            <div class="kpi-control">
+              <span class="kpi-control-label">Person</span>
+              <input id="dailyPersonSearch" placeholder="Search people…" style="border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:12px;" />
+            </div>
+          </div>
           <div class="view-toggle-group" style="margin-bottom:14px;">
             <button class="week-pill active" id="viewToggleCards">Cards</button>
             <button class="week-pill" id="viewToggleCompact">Compact</button>
@@ -1481,9 +1503,14 @@
               <span class="kpi-control-label">Week</span>
               <select id="historyWeekSelect"></select>
             </div>
+            <div class="kpi-control">
+              <span class="kpi-control-label">Person</span>
+              <input id="historyPersonSearch" placeholder="Search people…" style="border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:12px;" />
+            </div>
           </div>
+          <div class="kpi-dept-tabs" id="historyDayFilterRow" style="margin-bottom:16px;"></div>
           <table class="history-table" id="historyTable">
-            <thead><tr><th>Person</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th></tr></thead>
+            <thead id="historyTableHead"><tr><th>Person</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th></tr></thead>
             <tbody id="historyTableBody"></tbody>
           </table>
 
@@ -2162,6 +2189,11 @@ async function unlinkPriorityFromFollowup(priorityId){
   if(error) console.error(error);
 }
 
+async function unlinkFollowupEntry(entryId){
+  const { error } = await supabaseClient.from('followup_entries').update({ linked_priority_id: null }).eq('id', entryId);
+  if(error) console.error(error);
+}
+
 async function updateFollowup(id, fields){
   const { error } = await supabaseClient.from('followups').update(fields).eq('id', id);
   if(error) console.error(error);
@@ -2344,14 +2376,34 @@ document.getElementById('viewToggleCompact').addEventListener('click', () => {
 
 // Read-only plain-table view of everyone's week — scales far better than
 // Cards once the roster gets large, since Cards is one wide card per person.
+let dailyPersonSearchTerm = '';
+
+// Filters by the person-search box, and always puts the signed-in user's
+// own ticket first regardless of search or creation order — so nobody has
+// to hunt for themselves in a long roster every time they open this tab.
+function orderedFilteredMembers(){
+  const term = dailyPersonSearchTerm.trim().toLowerCase();
+  const filtered = members.filter(m => !term || (m.name || '').toLowerCase().includes(term));
+  const mine = filtered.filter(m => currentUser && m.owner_user_id === currentUser.id);
+  const others = filtered.filter(m => !(currentUser && m.owner_user_id === currentUser.id));
+  return [...mine, ...others];
+}
+
+document.getElementById('dailyPersonSearch').addEventListener('input', e => {
+  dailyPersonSearchTerm = e.target.value;
+  renderTickets();
+  renderCompactView();
+});
+
 function renderCompactView(){
   const tbody = document.getElementById('compactTableBody');
   if(!tbody) return;
-  if(members.length === 0){
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-note">No tickets yet.</div></td></tr>`;
+  const visibleMembers = orderedFilteredMembers();
+  if(visibleMembers.length === 0){
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-note">${members.length === 0 ? 'No tickets yet.' : 'No matches.'}</div></td></tr>`;
     return;
   }
-  tbody.innerHTML = members.map(m => {
+  tbody.innerHTML = visibleMembers.map(m => {
     const cells = DAYS.map(d => {
       const entries = m.priorities.filter(p => p.day === d);
       if(entries.length === 0) return `<td><span style="color:var(--muted); font-size:12px;">—</span></td>`;
@@ -2374,9 +2426,44 @@ function renderCompactView(){
 // Read-only, single-week browser. Unlike the original artifact, there's no
 // separate "archive" to query — priorities already carry their own
 // week_start, so browsing history is just asking for a different week.
+let historyDayFilter = new Set(); // empty = show all days
+let historyPersonSearchTerm = '';
+
+function visibleHistoryDays(){
+  return historyDayFilter.size === 0 ? DAYS : DAYS.filter(d => historyDayFilter.has(d));
+}
+
+function historyTableHeadHtml(){
+  return `<tr><th>Person</th>${visibleHistoryDays().map(d => `<th>${d}</th>`).join('')}</tr>`;
+}
+
+function renderHistoryDayFilterRow(){
+  const row = document.getElementById('historyDayFilterRow');
+  if(!row) return;
+  row.innerHTML = `<button class="kpi-dept-tab ${historyDayFilter.size === 0 ? 'active' : ''}" data-day="all">All Days</button>` +
+    DAYS.map(d => `<button class="kpi-dept-tab ${historyDayFilter.has(d) ? 'active' : ''}" data-day="${d}">${d}</button>`).join('');
+  row.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if(btn.dataset.day === 'all') historyDayFilter.clear();
+      else{
+        if(historyDayFilter.has(btn.dataset.day)) historyDayFilter.delete(btn.dataset.day);
+        else historyDayFilter.add(btn.dataset.day);
+      }
+      renderHistoryDayFilterRow();
+      document.getElementById('historyTableHead').innerHTML = historyTableHeadHtml();
+      const currentWeek = document.getElementById('historyWeekSelect').value;
+      if(currentWeek) renderHistoryTable(currentWeek);
+      if(document.getElementById('historyRangeResults').innerHTML.trim()) renderHistoryRange();
+    });
+  });
+}
+
 async function renderHistoryTab(){
   const select = document.getElementById('historyWeekSelect');
   if(!select) return;
+
+  renderHistoryDayFilterRow();
+  document.getElementById('historyTableHead').innerHTML = historyTableHeadHtml();
 
   const { data: weekRows, error: weekErr } = await supabaseClient
     .from('priorities')
@@ -2407,15 +2494,20 @@ async function renderHistoryTab(){
   await renderHistoryTable(weeks.includes(previousSelection) ? previousSelection : weeks[0]);
 }
 
-// Builds the Person × Mon–Fri table rows for one week's worth of priority
-// rows — shared by both the single-week view and the multi-week range view
-// below, so the two never drift apart in how they display a week.
+// Builds the Person × [visible days] table rows for one week's worth of
+// priority rows — shared by both the single-week view and the multi-week
+// range view below, so the two never drift apart in how they display a
+// week. Respects both the day filter and the person search box.
 function historyRowsHtml(people, priorityRows){
-  if(people.length === 0){
-    return `<tr><td colspan="6"><div class="empty-note">No entries for this week.</div></td></tr>`;
+  const days = visibleHistoryDays();
+  const term = historyPersonSearchTerm.trim().toLowerCase();
+  const filteredPeople = people.filter(m => !term || (m.name || '').toLowerCase().includes(term));
+
+  if(filteredPeople.length === 0){
+    return `<tr><td colspan="${days.length + 1}"><div class="empty-note">${people.length === 0 ? 'No entries for this week.' : 'No matches.'}</div></td></tr>`;
   }
-  return people.map(m => {
-    const cells = DAYS.map(d => {
+  return filteredPeople.map(m => {
+    const cells = days.map(d => {
       const entries = priorityRows.filter(p => p.member_id === m.id && p.day === d);
       if(entries.length === 0) return `<td><span style="color:var(--muted); font-size:12px;">—</span></td>`;
       return `<td>${entries.map(e => `
@@ -2445,10 +2537,16 @@ async function renderHistoryTable(weekStart){
   tbody.innerHTML = historyRowsHtml(peopleWithEntries, priorityRows || []);
 }
 
+document.getElementById('historyPersonSearch').addEventListener('input', e => {
+  historyPersonSearchTerm = e.target.value;
+  const currentWeek = document.getElementById('historyWeekSelect').value;
+  if(currentWeek) renderHistoryTable(currentWeek);
+  if(document.getElementById('historyRangeResults').innerHTML.trim()) renderHistoryRange();
+});
+
 // Multi-week range view — every week between From and To, each stacked as
-// its own labeled table. A person filter isn't included in this first pass
-// (the single-week view's table already shows everyone); worth adding if
-// scanning a specific person across many weeks turns out to be needed.
+// its own labeled table. Shares the same day filter and person search as
+// the single-week view above.
 async function renderHistoryRange(){
   const from = document.getElementById('historyRangeFrom').value;
   const to = document.getElementById('historyRangeTo').value;
@@ -2483,7 +2581,7 @@ async function renderHistoryRange(){
       <div style="margin-bottom:28px;">
         <div class="history-divider-label">Week of ${week}${week === currentWeekStart ? ' (current)' : ''}</div>
         <table class="history-table">
-          <thead><tr><th>Person</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th></tr></thead>
+          <thead>${historyTableHeadHtml()}</thead>
           <tbody>${historyRowsHtml(peopleWithEntries, priorityRows || [])}</tbody>
         </table>
       </div>
@@ -2548,15 +2646,51 @@ function renderLinkPicker(picker, entry, memberName){
   });
 }
 
+// Due-date urgency — green (>2 days out), amber (≤2 days), red (overdue).
+// Completed items never show as overdue regardless of date. The CSS for
+// this (due-overdue/due-soon/due-ontrack classes) carried over from the
+// original stylesheet when this was ported, but the logic to actually
+// compute and apply it never did — so due dates were rendering with no
+// color at all until now.
+function dueUrgency(due, status){
+  if(!due || status === 'completed') return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dueDate = new Date(due + 'T00:00:00');
+  const diffDays = Math.round((dueDate - today) / 86400000);
+  if(diffDays < 0) return 'overdue';
+  if(diffDays <= 2) return 'soon';
+  return 'ontrack';
+}
+function dueLabel(due, status){
+  const u = dueUrgency(due, status);
+  if(u === 'overdue') return 'Overdue · ';
+  if(u === 'soon') return 'Due soon · ';
+  return 'Due ';
+}
+
+// Lets priority textareas grow with their content instead of clipping long
+// text inside a fixed one-line box.
+function autoGrow(el){
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 220) + 'px';
+}
+
 function renderTickets(){
   const rail = document.getElementById('ticketRail');
+  const prevScroll = rail.scrollLeft; // restored at the end — otherwise every
+                                       // re-render (which happens on any
+                                       // realtime update, not just your own
+                                       // actions) snaps the rail back to the
+                                       // far left.
   rail.innerHTML = '';
 
-  if(members.length === 0){
-    rail.innerHTML = `<div class="rail-empty">No tickets yet — each team member adds their own below.</div>`;
+  const visibleMembers = orderedFilteredMembers();
+
+  if(visibleMembers.length === 0){
+    rail.innerHTML = `<div class="rail-empty">${members.length === 0 ? 'No tickets yet — each team member adds their own below.' : 'No matches for that search.'}</div>`;
   }
 
-  members.forEach(m => {
+  visibleMembers.forEach(m => {
     const editable = canEditTicket(m);
     const ticket = document.createElement('div');
     ticket.className = 'ticket' + (editable ? '' : ' locked');
@@ -2571,12 +2705,12 @@ function renderTickets(){
             <textarea class="day-input" rows="1" data-entry-id="${entry.id}" ${editable ? '' : 'disabled'}>${escapeHtml(entry.text || '')}</textarea>
             <button class="flag-day-btn ${entry.flagged ? 'flagged' : ''}" data-entry-id="${entry.id}" title="Send to Team P1s" ${editable ? '' : 'disabled'}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v18"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg></button>
             <button class="link-day-btn ${linkedEntry ? 'linked' : ''}" data-entry-id="${entry.id}" title="${linkedEntry ? 'Unlink from follow-up' : 'Link to a follow-up'}" ${editable ? '' : 'disabled'}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6"/><path d="M8 12l-2.5 2.5a3 3 0 0 0 4 4L12 16"/><path d="M16 12l2.5-2.5a3 3 0 0 0-4-4L12 8"/></svg></button>
-            <button class="due-day-btn ${entry.due ? 'has-due' : ''}" data-entry-id="${entry.id}" title="Set a due date" ${editable ? '' : 'disabled'}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg></button>
+            <button class="due-day-btn ${entry.due ? 'has-due' : ''} ${dueUrgency(entry.due, entry.status) ? 'due-' + dueUrgency(entry.due, entry.status) : ''}" data-entry-id="${entry.id}" title="Set a due date" ${editable ? '' : 'disabled'}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg></button>
             <input type="date" class="due-date-picker-input" data-entry-id="${entry.id}" value="${entry.due || ''}" style="position:absolute; opacity:0; pointer-events:none; width:1px; height:1px;" ${editable ? '' : 'disabled'} />
             <button class="remove-entry-mini" data-entry-id="${entry.id}" title="Remove this priority" ${editable ? '' : 'disabled'}>&times;</button>
           </div>
           ${statusButtonsHtml(entry.status, `data-entry-id="${entry.id}"`, editable)}
-          ${entry.due ? `<div class="day-due-chip"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><rect x="4" y="5" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>Due ${entry.due}</div>` : ''}
+          ${entry.due ? `<div class="day-due-chip ${dueUrgency(entry.due, entry.status) ? 'due-' + dueUrgency(entry.due, entry.status) : ''}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><rect x="4" y="5" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>${dueLabel(entry.due, entry.status)}${entry.due}</div>` : ''}
           ${entry.carried_weeks ? `<div class="carried-badge"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><path d="M4 4v5h5"/><path d="M4.6 9a8 8 0 1 0 1.9-5"/></svg>Week ${entry.carried_weeks + 1}</div>` : ''}
           ${linkedEntry ? `<div class="link-tag"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><path d="M9 15l6-6"/><path d="M8 12l-2.5 2.5a3 3 0 0 0 4 4L12 16"/><path d="M16 12l2.5-2.5a3 3 0 0 0-4-4L12 8"/></svg>Linked to follow-up (${escapeHtml(linkedEntry.ownerName || 'unowned')})<button class="unlink-x" data-entry-id="${entry.id}" title="Unlink">&times;</button></div>` : ''}
           <div class="link-picker-row" data-entry-id="${entry.id}" style="display:none;"></div>
@@ -2619,6 +2753,7 @@ function renderTickets(){
 
       ticket.querySelectorAll('.day-input').forEach(inp => {
         inp.addEventListener('change', e => updatePriority(e.target.dataset.entryId, { text: e.target.value }));
+        inp.addEventListener('input', e => autoGrow(e.target));
       });
       ticket.querySelectorAll('.status-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -2699,25 +2834,44 @@ function renderTickets(){
     if(name) await createMember(name);
   });
   rail.appendChild(addBtn);
+
+  rail.scrollLeft = prevScroll;
+  rail.querySelectorAll('textarea.day-input').forEach(autoGrow);
 }
 
 // ---------- Home: Team P1s table ----------
+let p1SearchTerm = '';
+let p1ShowCompleted = false;
+
+document.getElementById('p1Search').addEventListener('input', e => { p1SearchTerm = e.target.value; renderP1s(); });
+document.getElementById('p1ShowCompleted').addEventListener('change', e => { p1ShowCompleted = e.target.checked; renderP1s(); });
+
 function renderP1s(){
   const tbody = document.getElementById('p1TableBody');
   if(!tbody) return;
   tbody.innerHTML = '';
 
-  if(p1s.length === 0){
-    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-note">Nothing here yet.</div></td></tr>`;
+  const term = p1SearchTerm.trim().toLowerCase();
+  const visibleP1s = p1s.filter(item => {
+    if(!p1ShowCompleted && item.status === 'completed') return false;
+    if(term && !(item.text || '').toLowerCase().includes(term) && !(item.owner_name || '').toLowerCase().includes(term)) return false;
+    return true;
+  });
+
+  if(visibleP1s.length === 0){
+    const reason = p1s.length === 0 ? 'Nothing here yet.'
+      : (!p1ShowCompleted && p1s.every(i => i.status === 'completed')) ? 'Everything here is completed — check "Show completed" to see it.'
+      : 'No matches.';
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-note">${reason}</div></td></tr>`;
     return;
   }
 
-  p1s.forEach(item => {
+  visibleP1s.forEach(item => {
     const row = document.createElement('tr');
     row.innerHTML = `
       <td><input class="line-text" value="${escapeHtml(item.text)}" placeholder="What is it, and whose P1 is it?" /></td>
       <td><input class="line-owner" value="${escapeHtml(item.owner_name || '')}" placeholder="Owner" /></td>
-      <td><input type="date" class="line-due" value="${item.due || ''}" /></td>
+      <td><input type="date" class="line-due ${dueUrgency(item.due, item.status) ? 'due-' + dueUrgency(item.due, item.status) : ''}" value="${item.due || ''}" /></td>
       <td>${statusButtonsHtml(item.status, `data-p1-id="${item.id}"`, true)}</td>
       <td><button class="remove-x" title="Remove">&times;</button></td>
     `;
@@ -2735,34 +2889,95 @@ function renderP1s(){
 document.getElementById('addP1').addEventListener('click', addP1);
 
 // ---------- Home: Follow-Ups ----------
+// Populates the picker for linking FROM the follow-up side — lists every
+// priority (any member, current week) that has text and isn't already
+// linked to some other follow-up entry.
+function renderFollowupLinkPicker(picker, followupEntryId){
+  const linkedPriorityIds = new Set(
+    followups.flatMap(f => f.entries).filter(e => e.linked_priority_id).map(e => e.linked_priority_id)
+  );
+  const options = [];
+  members.forEach(m => {
+    m.priorities.forEach(p => {
+      if((p.text || '').trim() && !linkedPriorityIds.has(p.id)){
+        options.push({ id: p.id, label: `${m.name || 'Unnamed'} · ${p.day}: ${(p.text || '').slice(0, 50)}` });
+      }
+    });
+  });
+
+  if(options.length === 0){
+    picker.innerHTML = `<div class="empty-note" style="padding:6px 0;">No unlinked priorities with text this week.</div>`;
+    return;
+  }
+
+  picker.innerHTML = `
+    <select>
+      <option value="">Choose a priority…</option>
+      ${options.map(o => `<option value="${o.id}">${escapeHtml(o.label)}</option>`).join('')}
+    </select>
+  `;
+
+  picker.querySelector('select').addEventListener('change', async (e) => {
+    const value = e.target.value;
+    if(!value) return;
+    picker.style.display = 'none';
+    await linkPriorityToFollowupEntry(value, followupEntryId);
+  });
+}
+
+let followupSearchTerm = '';
+let followupShowCompleted = false;
+
+document.getElementById('followupSearch').addEventListener('input', e => { followupSearchTerm = e.target.value; renderFollowups(); });
+document.getElementById('followupShowCompleted').addEventListener('change', e => { followupShowCompleted = e.target.checked; renderFollowups(); });
+
 function renderFollowups(){
   const list = document.getElementById('followupList');
   if(!list) return;
   list.innerHTML = '';
 
-  if(followups.length === 0){
-    list.innerHTML = `<div class="empty-note">Nothing here yet.</div>`;
+  const term = followupSearchTerm.trim().toLowerCase();
+  const visibleFollowups = followups.filter(f => {
+    const allDone = f.entries.length > 0 && f.entries.every(e => e.status === 'completed');
+    if(!followupShowCompleted && allDone) return false;
+    if(term){
+      const ownerMatch = (f.owner_name || '').toLowerCase().includes(term);
+      const entryMatch = f.entries.some(e => (e.text || '').toLowerCase().includes(term));
+      if(!ownerMatch && !entryMatch) return false;
+    }
+    return true;
+  });
+
+  if(visibleFollowups.length === 0){
+    const reason = followups.length === 0 ? 'Nothing here yet.'
+      : (!followupShowCompleted && followups.every(f => f.entries.length > 0 && f.entries.every(e => e.status === 'completed'))) ? 'Everything here is fully completed — check the box above to see it.'
+      : 'No matches.';
+    list.innerHTML = `<div class="empty-note">${reason}</div>`;
     return;
   }
 
-  followups.forEach(f => {
+  visibleFollowups.forEach(f => {
     const card = document.createElement('div');
     card.className = 'followup-card';
     const entryRows = f.entries.map(e => `
       <div class="followup-entry" data-entry-id="${e.id}">
         <div class="followup-entry-main">
           <input class="line-text" data-entry-id="${e.id}" value="${escapeHtml(e.text)}" placeholder="Follow-up item" />
+          <button class="link-day-btn followup-link-btn ${e.linked_priority_id ? 'linked' : ''}" data-entry-id="${e.id}" title="${e.linked_priority_id ? 'Already linked — unlink via the chip below' : 'Link to a priority'}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6"/><path d="M8 12l-2.5 2.5a3 3 0 0 0 4 4L12 16"/><path d="M16 12l2.5-2.5a3 3 0 0 0-4-4L12 8"/></svg></button>
           <button class="remove-entry-mini" data-entry-id="${e.id}" title="Remove this item">&times;</button>
         </div>
         ${statusButtonsHtml(e.status, `data-entry-id="${e.id}"`, true)}
-        ${e.linked_priority_text ? `<div class="link-tag"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><path d="M9 15l6-6"/><path d="M8 12l-2.5 2.5a3 3 0 0 0 4 4L12 16"/><path d="M16 12l2.5-2.5a3 3 0 0 0-4-4L12 8"/></svg>${escapeHtml(e.linked_member_name || '')} &middot; ${escapeHtml(e.linked_day || '')}: ${escapeHtml(e.linked_priority_text)}</div>` : ''}
+        ${e.linked_priority_text ? `<div class="link-tag"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><path d="M9 15l6-6"/><path d="M8 12l-2.5 2.5a3 3 0 0 0 4 4L12 16"/><path d="M16 12l2.5-2.5a3 3 0 0 0-4-4L12 8"/></svg>${escapeHtml(e.linked_member_name || '')} &middot; ${escapeHtml(e.linked_day || '')}: ${escapeHtml(e.linked_priority_text)}<button class="unlink-x" data-entry-id="${e.id}" title="Unlink">&times;</button></div>` : ''}
+        <div class="link-picker-row" data-entry-id="${e.id}" style="display:none;"></div>
       </div>
     `).join('');
 
+    const allEntriesDone = f.entries.length > 0 && f.entries.every(e => e.status === 'completed');
+    const followupUrgency = dueUrgency(f.due, allEntriesDone ? 'completed' : 'not-started');
     card.innerHTML = `
       <div class="followup-card-top">
         <input class="line-owner" value="${escapeHtml(f.owner_name || '')}" placeholder="Owner" />
-        <input type="date" class="line-due" value="${f.due || ''}" />
+        <input type="date" class="line-due ${followupUrgency ? 'due-' + followupUrgency : ''}" value="${f.due || ''}" />
         <button class="remove-x" title="Remove this whole follow-up">&times;</button>
       </div>
       <div class="followup-entries">${entryRows}</div>
@@ -2779,6 +2994,23 @@ function renderFollowups(){
     });
     card.querySelectorAll('.remove-entry-mini').forEach(btn => {
       btn.addEventListener('click', () => deleteFollowupEntry(btn.dataset.entryId, f.id));
+    });
+    card.querySelectorAll('.followup-link-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if(btn.classList.contains('linked')) return; // unlink via the chip's × instead
+        const picker = card.querySelector(`.link-picker-row[data-entry-id="${btn.dataset.entryId}"]`);
+        if(!picker) return;
+        const isOpen = picker.style.display !== 'none';
+        card.querySelectorAll('.link-picker-row').forEach(p => p.style.display = 'none');
+        if(isOpen) return;
+        picker.style.display = '';
+        renderFollowupLinkPicker(picker, btn.dataset.entryId);
+      });
+    });
+    card.querySelectorAll('.unlink-x').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if(confirm('Unlink this follow-up from its priority?')) await unlinkFollowupEntry(btn.dataset.entryId);
+      });
     });
     card.querySelector('.remove-x').addEventListener('click', () => {
       if(confirm('Remove this whole follow-up?')) deleteFollowup(f.id);
