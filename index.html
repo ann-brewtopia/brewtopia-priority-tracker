@@ -1410,6 +1410,11 @@
           <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.6 2.6 0 1 1 3.6 2.4c-.9.4-1.4 1.1-1.4 2.1"/><line x1="12" y1="17" x2="12" y2="17.01"/></svg></span>
           <span class="sidebar-label">Help</span>
         </button>
+        <div class="sidebar-divider" id="adminSidebarDivider" style="display:none;"></div>
+        <button class="sidebar-item" data-tab="admin" id="adminSidebarItem" title="Admin" style="display:none;">
+          <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6z"/></svg></span>
+          <span class="sidebar-label">Admin</span>
+        </button>
       </div>
     </nav>
 
@@ -1567,11 +1572,16 @@
               <h4>KPIs</h4>
               <p>Admins see everyone's KPIs. Everyone else sees only their own — and only once an admin has explicitly shared it. If you don't see the KPIs tab at all, nothing has been shared with you yet.</p>
             </div>
-            <div class="help-section">
-              <h4>What's not built yet</h4>
-              <p>History (browsing past weeks) and linking a priority directly to a follow-up are still on the way — everything else here is fully working.</p>
-            </div>
           </div>
+        </div>
+
+        <div class="tab-content" id="tab-admin" style="display:none;">
+          <h3 style="margin:0 0 6px;">Admin</h3>
+          <p class="users-note">Change who has admin access. Admins can edit every ticket, manage the KPI roster, and see this tab; everyone else can edit only their own ticket. You can't change your own access here — ask another admin, or use the SQL Editor if you're the only one.</p>
+          <table class="history-table">
+            <thead><tr><th>Name</th><th>Current access</th><th></th></tr></thead>
+            <tbody id="adminUsersTableBody"></tbody>
+          </table>
         </div>
 
       </div>
@@ -1844,6 +1854,15 @@ function showAuthUI(){
     if(label){
       label.innerHTML = `Signed in as <strong>${escapeHtml(currentProfile.full_name || currentUser.email)}</strong>` +
         (isAdmin() ? ' — Admin' : '');
+    }
+    const adminItem = document.getElementById('adminSidebarItem');
+    const adminDivider = document.getElementById('adminSidebarDivider');
+    if(adminItem) adminItem.style.display = isAdmin() ? '' : 'none';
+    if(adminDivider) adminDivider.style.display = isAdmin() ? '' : 'none';
+    // If access was just revoked while sitting on this tab, don't leave
+    // them stranded on a screen they can no longer see.
+    if(!isAdmin() && document.getElementById('tab-admin').style.display !== 'none'){
+      document.querySelector('.sidebar-item[data-tab="home"]').click();
     }
   }else{
     loginScreen.style.display = '';
@@ -2350,6 +2369,7 @@ document.querySelectorAll('.sidebar-item[data-tab]').forEach(btn => {
     document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
     document.getElementById('tab-' + btn.dataset.tab).style.display = '';
     if(btn.dataset.tab === 'history') renderHistoryTab();
+    if(btn.dataset.tab === 'admin') renderAdminTab();
   });
 });
 
@@ -2614,6 +2634,61 @@ async function renderUsersTab(){
       <td><span class="hist-status ${p.role === 'admin' ? 'due-ontrack' : 'not-started'}">${p.role === 'admin' ? 'Admin — full access' : 'Member — own ticket only'}</span></td>
     </tr>
   `).join('');
+}
+
+// ---------- Admin: change who has admin access ----------
+// The actual permission check lives in the database (see the profiles RLS
+// policies in supabase_schema.sql) — only an existing admin's session can
+// successfully run this update at all. This UI just exposes that safely,
+// replacing the "run this SQL by hand" step from before.
+async function updateUserRole(profileId, newRole){
+  const { error } = await supabaseClient.from('profiles').update({ role: newRole }).eq('id', profileId);
+  if(error){ console.error(error); alert("Couldn't update that — " + error.message); return; }
+  await renderAdminTab();
+}
+
+async function renderAdminTab(){
+  const tbody = document.getElementById('adminUsersTableBody');
+  if(!tbody) return;
+  const { data, error } = await supabaseClient
+    .from('profiles')
+    .select('id, full_name, email, role')
+    .order('role', { ascending: true })
+    .order('email', { ascending: true });
+  if(error){
+    console.error(error);
+    tbody.innerHTML = `<tr><td colspan="3"><div class="empty-note">Could not load users.</div></td></tr>`;
+    return;
+  }
+  if(!data || data.length === 0){
+    tbody.innerHTML = `<tr><td colspan="3"><div class="empty-note">No one has signed in yet.</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = data.map(p => {
+    const isSelf = currentUser && p.id === currentUser.id;
+    const actionBtn = isSelf
+      ? `<span style="font-size:11.5px; color:var(--muted);">(this is you)</span>`
+      : `<button class="identity-change-btn" data-id="${p.id}" data-newrole="${p.role === 'admin' ? 'member' : 'admin'}">${p.role === 'admin' ? 'Remove admin' : 'Make admin'}</button>`;
+    return `
+      <tr>
+        <td><div class="history-name">${escapeHtml(p.full_name || p.email || 'Unknown')}</div>${p.full_name ? `<div class="history-role">${escapeHtml(p.email || '')}</div>` : ''}</td>
+        <td><span class="hist-status ${p.role === 'admin' ? 'due-ontrack' : 'not-started'}">${p.role === 'admin' ? 'Admin' : 'Member'}</span></td>
+        <td>${actionBtn}</td>
+      </tr>
+    `;
+  }).join('');
+
+  tbody.querySelectorAll('button[data-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const newRole = btn.dataset.newrole;
+      const verb = newRole === 'admin' ? 'give admin access to' : 'remove admin access from';
+      const row = btn.closest('tr');
+      const name = row.querySelector('.history-name').textContent;
+      if(confirm(`Are you sure you want to ${verb} ${name}?`)){
+        await updateUserRole(btn.dataset.id, newRole);
+      }
+    });
+  });
 }
 
 // ---------- Daily Priorities: ticket cards ----------
