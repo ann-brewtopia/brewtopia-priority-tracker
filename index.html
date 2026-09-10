@@ -1570,14 +1570,14 @@
             </div>
             <div class="help-section">
               <h4>KPIs</h4>
-              <p>Admins see everyone's KPIs. Everyone else sees only their own — and only once an admin has explicitly shared it. If you don't see the KPIs tab at all, nothing has been shared with you yet.</p>
+              <p>Admins and Executives see everyone's KPIs. Everyone else sees only their own — and only once an admin has explicitly shared it. If you don't see the KPIs tab at all, nothing has been shared with you yet.</p>
             </div>
           </div>
         </div>
 
         <div class="tab-content" id="tab-admin" style="display:none;">
           <h3 style="margin:0 0 6px;">Admin</h3>
-          <p class="users-note">Change who has admin access. Admins can edit every ticket, manage the KPI roster, and see this tab; everyone else can edit only their own ticket. You can't change your own access here — ask another admin, or use the SQL Editor if you're the only one.</p>
+          <p class="users-note">Three access levels: <strong>Admin</strong> can edit every ticket, manage the KPI roster, and see this tab. <strong>Executive</strong> can view every KPI but can't edit anything. <strong>Member</strong> can edit only their own ticket, and sees KPIs only once an admin has shared them. You can't change your own access here — ask another admin, or use the SQL Editor if you're the only one.</p>
           <table class="history-table">
             <thead><tr><th>Name</th><th>Current access</th><th></th></tr></thead>
             <tbody id="adminUsersTableBody"></tbody>
@@ -1763,6 +1763,10 @@ function isAdmin(){
   return !!currentProfile && currentProfile.role === 'admin';
 }
 
+function isExecutive(){
+  return !!currentProfile && currentProfile.role === 'executive';
+}
+
 // ----------------------------------------------------------------------------
 // Reads whatever Supabase put in the URL hash: an error
 // (#error=access_denied&error_code=otp_expired...) or a recovery-link marker
@@ -1853,7 +1857,7 @@ function showAuthUI(){
     const label = document.getElementById('currentUserLabel');
     if(label){
       label.innerHTML = `Signed in as <strong>${escapeHtml(currentProfile.full_name || currentUser.email)}</strong>` +
-        (isAdmin() ? ' — Admin' : '');
+        (isAdmin() ? ' — Admin' : isExecutive() ? ' — Executive' : '');
     }
     const adminItem = document.getElementById('adminSidebarItem');
     const adminDivider = document.getElementById('adminSidebarDivider');
@@ -2611,6 +2615,12 @@ async function renderHistoryRange(){
   container.innerHTML = sections.join('') || `<div class="empty-note">No entries in that range.</div>`;
 }
 
+const USER_ACCESS_DESCRIPTIONS = {
+  admin: 'Admin — full access',
+  executive: 'Executive — sees every KPI, own ticket only',
+  member: 'Member — own ticket only'
+};
+
 async function renderUsersTab(){
   const tbody = document.getElementById('usersTableBody');
   if(!tbody) return;
@@ -2631,7 +2641,7 @@ async function renderUsersTab(){
   tbody.innerHTML = data.map(p => `
     <tr>
       <td><div class="history-name">${escapeHtml(p.full_name || p.email || 'Unknown')}</div>${p.full_name ? `<div class="history-role">${escapeHtml(p.email || '')}</div>` : ''}</td>
-      <td><span class="hist-status ${p.role === 'admin' ? 'due-ontrack' : 'not-started'}">${p.role === 'admin' ? 'Admin — full access' : 'Member — own ticket only'}</span></td>
+      <td><span class="hist-status ${p.role === 'admin' ? 'due-ontrack' : p.role === 'executive' ? 'in-progress' : 'not-started'}">${USER_ACCESS_DESCRIPTIONS[p.role] || p.role}</span></td>
     </tr>
   `).join('');
 }
@@ -2646,6 +2656,9 @@ async function updateUserRole(profileId, newRole){
   if(error){ console.error(error); alert("Couldn't update that — " + error.message); return; }
   await renderAdminTab();
 }
+
+const ROLE_LABELS = { admin: 'Admin', executive: 'Executive', member: 'Member' };
+const ROLE_BADGE_CLASS = { admin: 'due-ontrack', executive: 'in-progress', member: 'not-started' };
 
 async function renderAdminTab(){
   const tbody = document.getElementById('adminUsersTableBody');
@@ -2666,26 +2679,30 @@ async function renderAdminTab(){
   }
   tbody.innerHTML = data.map(p => {
     const isSelf = currentUser && p.id === currentUser.id;
-    const actionBtn = isSelf
+    const action = isSelf
       ? `<span style="font-size:11.5px; color:var(--muted);">(this is you)</span>`
-      : `<button class="identity-change-btn" data-id="${p.id}" data-newrole="${p.role === 'admin' ? 'member' : 'admin'}">${p.role === 'admin' ? 'Remove admin' : 'Make admin'}</button>`;
+      : `<select class="role-select" data-id="${p.id}" data-current="${p.role}">
+          ${['member', 'executive', 'admin'].map(r => `<option value="${r}" ${p.role === r ? 'selected' : ''}>${ROLE_LABELS[r]}</option>`).join('')}
+        </select>`;
     return `
       <tr>
         <td><div class="history-name">${escapeHtml(p.full_name || p.email || 'Unknown')}</div>${p.full_name ? `<div class="history-role">${escapeHtml(p.email || '')}</div>` : ''}</td>
-        <td><span class="hist-status ${p.role === 'admin' ? 'due-ontrack' : 'not-started'}">${p.role === 'admin' ? 'Admin' : 'Member'}</span></td>
-        <td>${actionBtn}</td>
+        <td><span class="hist-status ${ROLE_BADGE_CLASS[p.role] || 'not-started'}">${ROLE_LABELS[p.role] || p.role}</span></td>
+        <td>${action}</td>
       </tr>
     `;
   }).join('');
 
-  tbody.querySelectorAll('button[data-id]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const newRole = btn.dataset.newrole;
-      const verb = newRole === 'admin' ? 'give admin access to' : 'remove admin access from';
-      const row = btn.closest('tr');
+  tbody.querySelectorAll('select.role-select').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const newRole = sel.value;
+      const oldRole = sel.dataset.current;
+      const row = sel.closest('tr');
       const name = row.querySelector('.history-name').textContent;
-      if(confirm(`Are you sure you want to ${verb} ${name}?`)){
-        await updateUserRole(btn.dataset.id, newRole);
+      if(confirm(`Change ${name}'s access from ${ROLE_LABELS[oldRole]} to ${ROLE_LABELS[newRole]}?`)){
+        await updateUserRole(sel.dataset.id, newRole);
+      }else{
+        sel.value = oldRole; // revert the dropdown if they cancel
       }
     });
   });

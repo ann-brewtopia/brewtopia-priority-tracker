@@ -34,7 +34,7 @@ create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   full_name text,
   email text,   -- mirrored from auth.users, since that table isn't queryable via the client API (needed for the Users tab, owner pickers, etc.)
-  role text not null default 'member' check (role in ('admin', 'member')),
+  role text not null default 'member' check (role in ('admin', 'executive', 'member')),
   created_at timestamptz not null default now()
 );
 
@@ -77,6 +77,17 @@ create function public.is_admin()
 returns boolean as $$
   select exists (
     select 1 from public.profiles where id = auth.uid() and role = 'admin'
+  );
+$$ language sql security definer stable;
+
+-- Executive: a narrower elevation than admin — can VIEW every KPI (see
+-- policies below), but has no edit rights over KPIs or anything else.
+-- Admin already has full access via its own "for all" policies, so this is
+-- purely additive — it doesn't touch what admins or ordinary members can do.
+create function public.is_executive()
+returns boolean as $$
+  select exists (
+    select 1 from public.profiles where id = auth.uid() and role = 'executive'
   );
 $$ language sql security definer stable;
 
@@ -320,6 +331,21 @@ create policy "a user can view kpi_notes for their own shared row"
     join public.kpi_people kp on kp.id = ki.kpi_person_id
     where kp.linked_user_id = auth.uid() and kp.shared_with_owner = true
   ));
+
+-- Executives: can view every KPI, same breadth as admin, but read-only —
+-- no insert/update/delete policy for this role on any of these three
+-- tables, same principle as the member policies above.
+create policy "executives can view all kpi_people"
+  on public.kpi_people for select
+  using (public.is_executive());
+
+create policy "executives can view all kpi_items"
+  on public.kpi_items for select
+  using (public.is_executive());
+
+create policy "executives can view all kpi_notes"
+  on public.kpi_notes for select
+  using (public.is_executive());
 
 
 -- ----------------------------------------------------------------------------
