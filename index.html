@@ -2080,9 +2080,14 @@ async function checkForWeekRollover(){
 // Members
 // ----------------------------------------------------------------------------
 async function createMember(name){
+  // Deliberately NOT owned by whoever clicks "+ Add team member" — a ticket
+  // created here is for someone specific (often not the person doing the
+  // data entry), so it starts unclaimed and that person claims it
+  // themselves once they sign in. Assigning ownership to the creator here
+  // was the actual bug behind "members should only edit their own ticket."
   const { data, error } = await supabaseClient
     .from('members')
-    .insert({ name, title: '', owner_user_id: currentUser.id })
+    .insert({ name, title: '', owner_user_id: null })
     .select().single();
   if(error){ console.error(error); return null; }
   return data;
@@ -2094,6 +2099,14 @@ async function claimTicket(memberId){
     .update({ owner_user_id: currentUser.id })
     .eq('id', memberId)
     .is('owner_user_id', null); // RLS also enforces this — belt and suspenders
+  if(error) console.error(error);
+}
+
+async function releaseTicket(memberId){
+  const { error } = await supabaseClient
+    .from('members')
+    .update({ owner_user_id: null })
+    .eq('id', memberId);
   if(error) console.error(error);
 }
 
@@ -2824,7 +2837,22 @@ function renderTickets(){
       `;
     }).join('');
 
-    const lockNote = editable ? '' : `<div class="ticket-lock-note"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Only ${escapeHtml(m.name || 'this person')} (or admin) can edit this</div>`;
+    const isUnclaimed = !m.owner_user_id;
+    let lockNote = '';
+    if(isUnclaimed){
+      lockNote = `<div class="ticket-lock-note" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+        <span>Unclaimed — is this you?</span>
+        <button class="identity-change-btn claim-ticket-btn" data-member-id="${m.id}" style="padding:3px 10px; font-size:11px;">This is me</button>
+      </div>`;
+    }else if(!editable){
+      lockNote = `<div class="ticket-lock-note"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:3px;"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Only ${escapeHtml(m.name || 'this person')} (or admin) can edit this</div>`;
+    }
+    if(isAdmin() && m.owner_user_id){
+      lockNote += `<div class="ticket-lock-note" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+        <span>Admin: owned, but wrong person?</span>
+        <button class="identity-change-btn release-ticket-btn" data-member-id="${m.id}" style="padding:3px 10px; font-size:11px;">Release</button>
+      </div>`;
+    }
 
     ticket.innerHTML = `
       ${lockNote}
@@ -2915,6 +2943,23 @@ function renderTickets(){
       }
     }
 
+    const claimBtn = ticket.querySelector('.claim-ticket-btn');
+    if(claimBtn){
+      claimBtn.addEventListener('click', async () => {
+        if(confirm(`Claim "${m.name || 'this ticket'}" as yours? You'll be able to edit it going forward.`)){
+          await claimTicket(claimBtn.dataset.memberId);
+        }
+      });
+    }
+    const releaseBtn = ticket.querySelector('.release-ticket-btn');
+    if(releaseBtn){
+      releaseBtn.addEventListener('click', async () => {
+        if(confirm(`Release "${m.name || 'this ticket'}" back to unclaimed? Its current owner will lose edit access until someone claims it again.`)){
+          await releaseTicket(releaseBtn.dataset.memberId);
+        }
+      });
+    }
+
     rail.appendChild(ticket);
   });
 
@@ -2923,7 +2968,11 @@ function renderTickets(){
   addBtn.innerText = '+ Add team member';
   addBtn.addEventListener('click', async () => {
     const name = prompt('Name for the new ticket:');
-    if(name) await createMember(name);
+    if(!name) return;
+    const newMember = await createMember(name);
+    if(newMember && confirm(`Is "${name}" you? Claim this ticket now so you can edit it.`)){
+      await claimTicket(newMember.id);
+    }
   });
   rail.appendChild(addBtn);
 
